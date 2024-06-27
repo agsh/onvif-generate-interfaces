@@ -1,10 +1,12 @@
 const commonRules = {
-  'no-console'                   : 'warn',
+  'no-console'                   : 0,
   'comma-dangle'                 : [ 'error', 'always-multiline' ],
   'import/extensions'            : 0,
+  'no-await-in-loop'             : 0,
+  'import/no-cycle'              : 0,
   'quote-props'                  : 0,
   'import/prefer-default-export' : 0,
-  'no-await-in-loop'             : 0,
+  "import/order"                 : "off",
   'no-restricted-syntax'         : 0,
   'max-classes-per-file'         : 0,
   'no-underscore-dangle'         : 0,
@@ -16,7 +18,6 @@ const commonRules = {
   'brace-style'                  : ["error", "1tbs", { "allowSingleLine" : true }],
   'lines-between-class-members'  : 0,
   'max-len'                      : ['warn', 200],
-  'class-methods-use-this'       : 0,
   'no-nested-ternary'            : 0,
   'no-use-before-define'         : 0,
   'key-spacing'                  : ['error', {
@@ -31,6 +32,10 @@ const commonRules = {
   '@typescript-eslint/member-delimiter-style' : 1,
   'import/no-extraneous-dependencies'         : 0,
   // 'import/export'                             : 0
+  'object-curly-newline'                      : ["error", {
+    "ImportDeclaration" : { "multiline" : true, "minProperties" : 3,  "consistent" : true },
+  }],
+  'object-property-newline' : ["error", { "allowAllPropertiesOnSameLine" : true, "allowMultiplePropertiesPerLine" : true }],
 };
 
 module.exports = {
@@ -60,7 +65,6 @@ module.exports = {
         '@typescript-eslint/interface-name-prefix' : 0,
         '@typescript-eslint/no-non-null-assertion' : 0,
         '@typescript-eslint/no-explicit-any'       : 0, // TRY: Remove this
-        '@typescript-eslint/ban-ts-ignore'         : 0, // TRY: Remove this
       },
 
       settings : {
@@ -70,7 +74,7 @@ module.exports = {
         },
         'import/resolver' : {
           node : {
-            extensions : ['.ts', '.d.ts', '.js'],
+            extensions : ['.ts', '.d.ts', '.js', '.cjs'],
           },
         },
       },

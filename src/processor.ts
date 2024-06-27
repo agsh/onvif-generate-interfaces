@@ -1,10 +1,13 @@
-import { readFileSync, writeFileSync, lstatSync } from 'fs';
+import {
+  lstatSync, readFileSync, writeFileSync,
+} from 'fs';
 import { Parser } from 'xml2js';
 import ts, { TypeNode } from 'typescript';
 import { glob } from 'glob';
 import chalk from 'chalk';
 import { join, parse } from 'node:path';
 import { mkdirSync } from 'node:fs';
+import { ESLint } from 'eslint';
 
 const BASICS_FILENAME = 'basics';
 
@@ -189,7 +192,7 @@ type Links = Map<string, IType>
 /**
  * Common class to process xml-files
  */
-export class Processor {
+export abstract class Processor {
   public readonly filePath: string;
   public readonly nodes: ts.Node[] = [];
   protected schema?: ISchemaDefinition;
@@ -205,6 +208,8 @@ export class Processor {
     this.links = links;
     this.fileName = parse(this.filePath).name + (this.filePath.includes('ver2') ? '2' : '');
   }
+
+  abstract process() : void;
 
   /**
    * Process the xml-file, generates all interface nodes and adds them to exportNodes
@@ -227,7 +232,6 @@ export class Processor {
 
   /**
    * Generate imports for all used types in the file using links map
-   * @param links
    */
   suffix(links: Links) {
     const imports: Record<string, string[]> = {};
@@ -252,10 +256,13 @@ export class Processor {
       ),
       ts.factory.createStringLiteral(`./${fileName}`, true),
     ));
-    this.nodes.unshift(...importNodes);
+    this.nodes.unshift(...importNodes, ts.factory.createIdentifier('\n'));
   }
 
-  writeInterface(path: string) {
+  /**
+   * Generate interface file at given path
+   */
+  async writeInterface(path: string) {
     const nodeArr = ts.factory.createNodeArray(this.nodes);
 
     // printer for writing the AST to a file as code
@@ -266,9 +273,18 @@ export class Processor {
       sourceFile,
     );
 
+    const eslint = new ESLint({
+      fix                : true,
+      overrideConfigFile : '.eslintrc.cjs',
+    });
+    const lintedResult = await eslint.lintText(result, {
+      filePath : join(path, `${this.fileName}.ts`),
+    });
+    await ESLint.outputFixes(lintedResult);
+
     // write the code to file
     console.log(chalk.greenBright(`Save to ${join(path, `${this.fileName}.ts`)}`));
-    writeFileSync(join(path, `${this.fileName}.ts`), result, { encoding : 'utf-8' });
+    // writeFileSync(join(path, `${this.fileName}.ts`), resultText, { encoding : 'utf-8' });
   }
 
   async processXML() {
@@ -282,11 +298,7 @@ export class Processor {
     return xmlParser.parseStringPromise(xsdData);
   }
 
-  async process() {
-    throw new Error('Not implemented');
-  }
-
-  createAnnotationIfExists(attribute: any, node: any) {
+  static createAnnotationIfExists(attribute: any, node: any) {
     if (attribute['xs:annotation']) {
       return ts.addSyntheticLeadingComment(
         node,
@@ -306,6 +318,10 @@ export class Processor {
         name : this.fileName,
       });
     }
+    if (this.declaredTypes.has(name)) {
+      console.log(chalk.magentaBright(`${name} in ${this.links.get(name)!.name} already declared`));
+      return;
+    }
     this.declaredTypes.add(name);
     this.nodes.push(node);
   }
@@ -321,7 +337,7 @@ export class Processor {
       if (simpleType['xs:restriction'][0]['xs:enumeration']) {
         this.addNode(
           name,
-          this.createAnnotationIfExists(
+          Processor.createAnnotationIfExists(
             simpleType,
             ts.factory.createTypeAliasDeclaration(
               exportModifier,
@@ -333,15 +349,19 @@ export class Processor {
           ),
         );
       } else {
+        const typeName = dataTypes(simpleType['xs:restriction'][0].meta.base);
+        if (typeName.charAt(0) === typeName.charAt(0).toUpperCase()) {
+          this.usedTypes.add(typeName);
+        }
         this.addNode(
           name,
-          this.createAnnotationIfExists(
+          Processor.createAnnotationIfExists(
             simpleType,
             ts.factory.createTypeAliasDeclaration(
               exportModifier,
               interfaceSymbol,
               undefined,
-              ts.factory.createTypeReferenceNode(dataTypes(simpleType['xs:restriction'][0].meta.base)),
+              ts.factory.createTypeReferenceNode(typeName),
             ),
           ),
         );
@@ -350,7 +370,7 @@ export class Processor {
       /** LISTS */
       this.addNode(
         name,
-        this.createAnnotationIfExists(
+        Processor.createAnnotationIfExists(
           simpleType,
           ts.factory.createTypeAliasDeclaration(
             exportModifier,
@@ -384,7 +404,7 @@ export class Processor {
       this.usedTypes.add(typeName);
     }
     // console.log(chalk.yellow(`> ${attribute.meta.name} ${cleanName(dataTypes(attribute.meta.type))}`));
-    return this.createAnnotationIfExists(attribute, property);
+    return Processor.createAnnotationIfExists(attribute, property);
   }
 
   generateElementType(element: IElement) {
@@ -408,11 +428,13 @@ export class Processor {
 
     /** Complex Content */
     if (Array.isArray(complexType['xs:complexContent'])) {
-      const name = complexType['xs:complexContent'][0]['xs:extension'][0].meta.base;
-      const heritageName = name.slice(name.indexOf(':') + 1);
-      if (heritageName.toUpperCase() === name.toUpperCase()) {
-        console.log(chalk.bgYellowBright.black(`> ${heritageName} ${name}`));
+      const extendsName = complexType['xs:complexContent'][0]['xs:extension'][0].meta.base;
+      const heritageName = extendsName.slice(extendsName.indexOf(':') + 1);
+      if (name === heritageName) {
+        // type inherits itself
+        return;
       }
+      this.usedTypes.add(heritageName);
       heritage = extendInterface(heritageName);
       if (complexType['xs:sequence']) {
         throw new Error('complexType[\'xs:sequence\'] in complexContent: complexType.meta.name');
@@ -457,8 +479,7 @@ export class Processor {
               this.generateComplexTypeInterface(attribute['xs:complexType'][0]);
               attribute.meta.type = `tt:${attribute.meta.name}`;
             }
-            const cl = this.createProperty(attribute);
-            return cl;
+            return this.createProperty(attribute);
           }),
         );
       }
@@ -473,7 +494,7 @@ export class Processor {
     );
     this.addNode(
       name,
-      this.createAnnotationIfExists(complexType, node),
+      Processor.createAnnotationIfExists(complexType, node),
     );
   }
 }
@@ -544,10 +565,12 @@ class InterfaceProcessor {
 
     for (const proc of processors) {
       proc.suffix(this.links);
-      proc.writeInterface(outPath);
+      await proc.writeInterface(outPath);
     }
 
-    const nodeArr = ts.factory.createNodeArray(this.nodes);
+    const nodeArr = ts.factory.createNodeArray(builtInTypes);
+    // For all generated interfaces in one file
+    // const nodeArr = ts.factory.createNodeArray(this.nodes);
     const printer = ts.createPrinter({ newLine : ts.NewLineKind.LineFeed });
     const result = printer.printList(
       ts.ListFormat.MultiLine,
@@ -561,9 +584,7 @@ class InterfaceProcessor {
   }
 }
 
-//
-
-const [_a, _b, sources, out] = process.argv;
+const [, , sources, out] = process.argv;
 if (out !== undefined && lstatSync(sources).isDirectory()) {
   mkdirSync(out, { recursive : true });
   (new InterfaceProcessor()).start(sources, out).catch(console.error);

@@ -12,7 +12,7 @@
     "build": "tsc --build",
     "watch": "tsc --build --watch",
     "typedoc": "typedoc src",
-    "lint": "eslint lib/*.js",
+    "lint": "eslint .",
     "run": "tsx src/processor.ts"
   },
   "contributors": [
@@ -27,15 +27,16 @@
     "url": "https://github.com/agsh/onvif-generate-interfaces.git"
   },
   "dependencies": {
+    "chalk": "^5.2.0",
     "glob": "^10.4.2",
-    "xml2js": "^0.6.2",
-    "chalk": "^5.2.0"
+    "xml2js": "^0.6.2"
   },
   "keywords": [
     "onvif"
   ],
   "license": "MIT",
   "devDependencies": {
+    "@types/eslint": "^8.56.10",
     "@types/node": "^20.11.24",
     "@types/xml2js": "^0.4.14",
     "@typescript-eslint/eslint-plugin": "^7.1.0",
