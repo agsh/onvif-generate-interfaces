@@ -1,9 +1,10 @@
-import { readFileSync, writeFileSync } from 'fs';
+import { readFileSync, writeFileSync, lstatSync } from 'fs';
 import { Parser } from 'xml2js';
 import ts, { TypeNode } from 'typescript';
 import { glob } from 'glob';
 import chalk from 'chalk';
-import * as path from 'node:path';
+import { join, parse } from 'node:path';
+import { mkdirSync } from 'node:fs';
 
 const BASICS_FILENAME = 'basics';
 
@@ -73,6 +74,9 @@ function dataTypes(xsdType?: string): string {
     case 'xs:QName': return 'any';
     case 'wsnt:TopicExpressionType': return 'any';
     case 'wsnt:QueryExpressionType': return 'any';
+    case 'wsnt:AbsoluteOrRelativeTimeType': return 'any';
+    case 'wsa:EndpointReferenceType': return 'any';
+    case 'mpqf:MpegQueryType': return 'any';
     case 'xs:positiveInteger': return 'PositiveInteger';
     case 'xs:nonNegativeInteger': return 'number';
     case 'tt:Object': return 'OnvifObject';
@@ -199,8 +203,7 @@ export class Processor {
   }: ProcessorConstructor) {
     this.filePath = filePath;
     this.links = links;
-    console.log(chalk.whiteBright(JSON.stringify(path.parse(this.filePath), null, '\t')));
-    this.fileName = path.parse(this.filePath).name;
+    this.fileName = parse(this.filePath).name + (this.filePath.includes('ver2') ? '2' : '');
   }
 
   /**
@@ -227,49 +230,32 @@ export class Processor {
    * @param links
    */
   suffix(links: Links) {
-    const imports: Map<string, string[]> = new Map();
+    const imports: Record<string, string[]> = {};
     for (const type of this.usedTypes.difference(this.declaredTypes)) {
-      console.log(links.get(type));
-      console.log(type, links.get(type)?.name);
+      const fileName = links.get(type)?.name;
+      if (!fileName) {
+        console.warn(chalk.yellow(`Type ${type} not found in links`));
+      } else if (imports[fileName]) {
+        imports[fileName].push(type);
+      } else {
+        imports[fileName] = [type];
+      }
     }
-    const importNode = ts.factory.createImportDeclaration(
+    const importNodes = Object.entries(imports).map(([fileName, types]) => ts.factory.createImportDeclaration(
       undefined,
       ts.factory.createImportClause(
         false,
         undefined,
-        ts.factory.createNamedImports([
-          ts.factory.createImportSpecifier(
-            false,
-            undefined,
-            ts.factory.createIdentifier('text'),
-          ),
-        ]),
+        ts.factory.createNamedImports(
+          types.map((type) => ts.factory.createImportSpecifier(false, undefined, ts.factory.createIdentifier(type))),
+        ),
       ),
-      ts.factory.createStringLiteral('moduleSpec', true),
-    );
-    this.nodes.unshift(importNode);
-    // this.writeInterface();
+      ts.factory.createStringLiteral(`./${fileName}`, true),
+    ));
+    this.nodes.unshift(...importNodes);
   }
 
-  /**
-   * @deprecated
-   */
-  async main(): Promise<ts.Node[]> {
-    await this.process();
-    if (this.schema?.['xs:simpleType']) {
-      this.schema['xs:simpleType'].forEach((simpleType) => this.generateSimpleTypeInterface(simpleType));
-    }
-    if (this.schema?.['xs:complexType']) {
-      this.schema['xs:complexType'].forEach((complexType) => this.generateComplexTypeInterface(complexType));
-    }
-    if (this.schema?.['xs:element']) {
-      this.schema['xs:element'].forEach((element) => this.generateElementType(element));
-    }
-    this.writeInterface();
-    return this.nodes;
-  }
-
-  writeInterface() {
+  writeInterface(path: string) {
     const nodeArr = ts.factory.createNodeArray(this.nodes);
 
     // printer for writing the AST to a file as code
@@ -281,8 +267,8 @@ export class Processor {
     );
 
     // write the code to file
-    console.log(chalk.yellow(`Save to ./utils/interfaces/${this.fileName}.d.ts`));
-    writeFileSync(`./utils/interfaces/${this.fileName}.ts`, result, { encoding : 'utf-8' });
+    console.log(chalk.greenBright(`Save to ${join(path, `${this.fileName}.ts`)}`));
+    writeFileSync(join(path, `${this.fileName}.ts`), result, { encoding : 'utf-8' });
   }
 
   async processXML() {
@@ -314,12 +300,13 @@ export class Processor {
 
   addNode(name: string, node: ts.Node) {
     if (this.links.has(name)) {
-      console.log(chalk.magentaBright(`${name} in ${this.links.get(name)!.name} already exists`));
+      // console.log(chalk.magentaBright(`${name} in ${this.links.get(name)!.name} already exists`));
+    } else {
+      this.links.set(name, {
+        name : this.fileName,
+      });
     }
     this.declaredTypes.add(name);
-    this.links.set(name, {
-      name : this.fileName,
-    });
     this.nodes.push(node);
   }
 
@@ -396,7 +383,7 @@ export class Processor {
     if (typeName.charAt(0) === typeName.charAt(0).toUpperCase()) {
       this.usedTypes.add(typeName);
     }
-    console.log(chalk.yellow(`> ${attribute.meta.name} ${cleanName(dataTypes(attribute.meta.type))}`));
+    // console.log(chalk.yellow(`> ${attribute.meta.name} ${cleanName(dataTypes(attribute.meta.type))}`));
     return this.createAnnotationIfExists(attribute, property);
   }
 
@@ -423,6 +410,9 @@ export class Processor {
     if (Array.isArray(complexType['xs:complexContent'])) {
       const name = complexType['xs:complexContent'][0]['xs:extension'][0].meta.base;
       const heritageName = name.slice(name.indexOf(':') + 1);
+      if (heritageName.toUpperCase() === name.toUpperCase()) {
+        console.log(chalk.bgYellowBright.black(`> ${heritageName} ${name}`));
+      }
       heritage = extendInterface(heritageName);
       if (complexType['xs:sequence']) {
         throw new Error('complexType[\'xs:sequence\'] in complexContent: complexType.meta.name');
@@ -526,8 +516,7 @@ class InterfaceProcessor {
 
     const processors = [];
 
-    const xsds = await glob(path.join(sourcesPath, '/**/*.xsd'));
-    console.log(path.join(sourcesPath, '/**/*.xsd'));
+    const xsds = await glob(join(sourcesPath, '/**/*.xsd'));
     for (const xsd of xsds) {
       console.log(chalk.greenBright(`processing ${xsd}`));
       const proc = new ProcessorXSD({
@@ -540,7 +529,7 @@ class InterfaceProcessor {
       this.nodes = this.nodes.concat(procNodes);
     }
 
-    const wsdls = await glob(path.join(sourcesPath, '/**/*.wsdl'));
+    const wsdls = await glob(join(sourcesPath, '/**/*.wsdl'));
     for (const wdsl of wsdls) {
       console.log(chalk.greenBright(`processing ${wdsl}`));
       const proc = new ProcessorWSDL({
@@ -555,18 +544,8 @@ class InterfaceProcessor {
 
     for (const proc of processors) {
       proc.suffix(this.links);
-      console.log('');
-      console.log('------------------------------');
-      console.log('');
+      proc.writeInterface(outPath);
     }
-
-    // const proc = new ProcessorWSDL({
-    //   filePath : '../specs/wsdl/ver20/ptz/wsdl/ptz.wsdl',
-    //   nodes    : this.nodes,
-    //   types    : this.types,
-    //   links    : this.links,
-    // });
-    // await proc.main();
 
     const nodeArr = ts.factory.createNodeArray(this.nodes);
     const printer = ts.createPrinter({ newLine : ts.NewLineKind.LineFeed });
@@ -577,17 +556,16 @@ class InterfaceProcessor {
     );
 
     // write the code to file
-    // writeFileSync(path.join(outPath, `${BASICS_FILENAME}.ts`), result, { encoding : 'utf-8' });
-
-    // console.log(chalk.greenBright([...this.links.entries()]));
+    writeFileSync(join(outPath, `${BASICS_FILENAME}.ts`), result, { encoding : 'utf-8' });
+    console.log('Done!');
   }
 }
 
 //
 
 const [_a, _b, sources, out] = process.argv;
-if (out !== undefined) {
-  console.log('m');
+if (out !== undefined && lstatSync(sources).isDirectory()) {
+  mkdirSync(out, { recursive : true });
   (new InterfaceProcessor()).start(sources, out).catch(console.error);
 } else {
   console.log(`Usage: processor.ts <source> <output>
