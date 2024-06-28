@@ -214,6 +214,9 @@ function formatComment(str: string) {
     .split('\n')
     .filter((a) => a.trim() !== '')
     .map((a) => a.trim().replace(/<[^>]*>/g, ''));
+  if (strs.length === 0) {
+    return '';
+  }
   if (strs.length === 1) {
     return `* ${strs[0]} `;
   }
