@@ -1,18 +1,16 @@
-import {
-  lstatSync, readFileSync, writeFileSync,
-} from 'fs';
+import { lstatSync, readFileSync, writeFileSync } from 'fs';
 import { Parser } from 'xml2js';
 import ts, { TypeNode } from 'typescript';
 import { glob } from 'glob';
 import chalk from 'chalk';
 import { join, parse } from 'node:path';
 import { mkdirSync } from 'node:fs';
-import { ESLint } from 'eslint';
+import { format } from 'prettier';
 
 const BASICS_FILENAME = 'basics';
 
 const sourceFile = ts.createSourceFile(
-  'soap-types.ts', // the output file name
+  'source.ts', // the output file name
   '', // the text of the source code, not needed for our purposes
   ts.ScriptTarget.Latest, // the target language version for the output file
   false,
@@ -20,32 +18,27 @@ const sourceFile = ts.createSourceFile(
 );
 
 // used for adding `export` directive to generated type
-const exportModifier = ts.factory.createModifiersFromModifierFlags(
-  ts.ModifierFlags.Export,
-);
+const exportModifier = ts.factory.createModifiersFromModifierFlags(ts.ModifierFlags.Export);
 
 const generateBuiltIns = (): [ts.Node[], Links] => {
   const types = {
-    AnyURI     : 'string',
-    FilterType : 'any',
-    NCName     : 'string',
+    AnyURI: 'string',
+    FilterType: 'any',
+    NCName: 'string',
   };
   const builtInTypeNodes: ts.Node[] = [
     ts.factory.createIdentifier('/* eslint-disable import/export, no-tabs */'),
-    ...Object.entries(types).map(([name, typeName]) => ts.factory.createTypeAliasDeclaration(
-      exportModifier,
-      name,
-      undefined,
-      ts.factory.createTypeReferenceNode(typeName),
-    )),
+    ...Object.entries(types).map(([name, typeName]) =>
+      ts.factory.createTypeAliasDeclaration(
+        exportModifier,
+        name,
+        undefined,
+        ts.factory.createTypeReferenceNode(typeName),
+      ),
+    ),
   ];
-  const builtInLinks: Links = new Map(
-    Object.entries(types).map(([name]) => ([
-      name,
-      { name : BASICS_FILENAME },
-    ])),
-  );
-  return ([builtInTypeNodes, builtInLinks]);
+  const builtInLinks: Links = new Map(Object.entries(types).map(([name]) => [name, { name: BASICS_FILENAME }]));
+  return [builtInTypeNodes, builtInLinks];
 };
 
 function dataTypes(xsdType?: string): string {
@@ -54,37 +47,68 @@ function dataTypes(xsdType?: string): string {
   }
   // const type = xsdType.slice(3);
   switch (xsdType) {
-    case 'xs:double': return 'number';
-    case 'xs:float': return 'number';
-    case 'xs:int': return 'number';
-    case 'xs:integer': return 'number';
-    case 'xs:short': return 'number';
-    case 'xs:signedInt': return 'number';
-    case 'xs:unsignedInt': return 'number';
-    case 'xs:unsignedShort': return 'number';
-    case 'xs:dateTime': return 'Date';
-    case 'xs:token': return 'string';
-    case 'xs:anyURI': return 'AnyURI';
-    case 'xs:anyType': return 'any';
-    case 'xs:hexBinary': return 'any';
-    case 'xs:base64Binary': return 'any';
-    case 'xs:duration': return 'any';
-    case 'wsnt:FilterType': return 'any';
-    case 'wsnt:NotificationMessageHolderType': return 'any';
-    case 'soapenv:Envelope': return 'any';
-    case 'soapenv:Fault': return 'any';
-    case 'xs:anySimpleType': return 'any';
-    case 'xs:QName': return 'any';
-    case 'wsnt:TopicExpressionType': return 'any';
-    case 'wsnt:QueryExpressionType': return 'any';
-    case 'wsnt:AbsoluteOrRelativeTimeType': return 'any';
-    case 'wsa:EndpointReferenceType': return 'any';
-    case 'mpqf:MpegQueryType': return 'any';
-    case 'xs:positiveInteger': return 'PositiveInteger';
-    case 'xs:nonNegativeInteger': return 'number';
-    case 'tt:Object': return 'OnvifObject';
-    case 'xs:time': return 'Time';
-    default: return xsdType.slice(xsdType.indexOf(':') + 1);
+    case 'xs:double':
+      return 'number';
+    case 'xs:float':
+      return 'number';
+    case 'xs:int':
+      return 'number';
+    case 'xs:integer':
+      return 'number';
+    case 'xs:short':
+      return 'number';
+    case 'xs:signedInt':
+      return 'number';
+    case 'xs:unsignedInt':
+      return 'number';
+    case 'xs:unsignedShort':
+      return 'number';
+    case 'xs:dateTime':
+      return 'Date';
+    case 'xs:token':
+      return 'string';
+    case 'xs:anyURI':
+      return 'AnyURI';
+    case 'xs:anyType':
+      return 'any';
+    case 'xs:hexBinary':
+      return 'any';
+    case 'xs:base64Binary':
+      return 'any';
+    case 'xs:duration':
+      return 'any';
+    case 'wsnt:FilterType':
+      return 'any';
+    case 'wsnt:NotificationMessageHolderType':
+      return 'any';
+    case 'soapenv:Envelope':
+      return 'any';
+    case 'soapenv:Fault':
+      return 'any';
+    case 'xs:anySimpleType':
+      return 'any';
+    case 'xs:QName':
+      return 'any';
+    case 'wsnt:TopicExpressionType':
+      return 'any';
+    case 'wsnt:QueryExpressionType':
+      return 'any';
+    case 'wsnt:AbsoluteOrRelativeTimeType':
+      return 'any';
+    case 'wsa:EndpointReferenceType':
+      return 'any';
+    case 'mpqf:MpegQueryType':
+      return 'any';
+    case 'xs:positiveInteger':
+      return 'PositiveInteger';
+    case 'xs:nonNegativeInteger':
+      return 'number';
+    case 'tt:Object':
+      return 'any';
+    case 'xs:time':
+      return 'Time';
+    default:
+      return xsdType.slice(xsdType.indexOf(':') + 1);
   }
 }
 
@@ -105,14 +129,20 @@ function camelCase(name: string): string {
   }
   return name;
 }
-
-interface ISimpleType {
+interface IAttribute {
   meta: {
-    name: string;
+    type?: string;
+    name?: string;
+    ref?: string;
+    maxOccurs?: string;
+    use: 'required' | 'optional';
   };
-  'xs:annotation': {
+  'xs:annotation'?: {
     'xs:documentation': string[];
   }[];
+}
+
+interface ISimpleType extends IAttribute {
   'xs:restriction': {
     meta: {
       base: string;
@@ -130,25 +160,16 @@ interface ISimpleType {
   }[];
 }
 
-interface IComplexType {
-  meta: {
-    name: string;
-  };
+interface IComplexType extends IAttribute {
   'xs:complexContent': {
     'xs:extension': {
       meta: {
         base: string;
       };
-      'xs:sequence': any[];
+      'xs:sequence': never[];
     }[];
   }[];
-  'xs:attribute'?: {
-    meta : {
-      name: string;
-      type: string;
-      use: 'required' | 'optional';
-    };
-  }[];
+  'xs:attribute'?: IAttribute[];
   'xs:sequence'?: {
     'xs:element': {
       meta: {
@@ -161,10 +182,7 @@ interface IComplexType {
         'xs:documentation': string[];
       }[];
     }[];
-    'xs:any'?: any;
-  }[];
-  'xs:annotation'?: {
-    'xs:documentation': string[];
+    'xs:any'?: never;
   }[];
 }
 
@@ -176,6 +194,8 @@ interface IElement {
 }
 
 interface ISchemaDefinition {
+  'xs:schema': never;
+  'wsdl:definitions': { 'wsdl:types': { 'xs:schema': never }[] };
   'xs:simpleType': ISimpleType[];
   'xs:complexType': IComplexType[];
   'xs:element': IElement[];
@@ -187,29 +207,45 @@ interface ProcessorConstructor {
   links: Links;
 }
 
-type Links = Map<string, IType>
+type Links = Map<string, IType>;
+
+function formatComment(str: string) {
+  const strs = str
+    .split('\n')
+    .filter((a) => a.trim() !== '')
+    .map((a) => a.trim().replace(/<[^>]*>/g, ''));
+  if (strs.length === 1) {
+    return `* ${strs[0]} `;
+  }
+  const [first, ...others] = strs;
+  return `*\n * ${first}\n${others.map((a) => ` * ${a}`).join('\n')}\n `;
+}
 
 /**
  * Common class to process xml-files
  */
 export abstract class Processor {
   public readonly filePath: string;
+
   public readonly nodes: ts.Node[] = [];
+
   protected schema?: ISchemaDefinition;
+
   public readonly fileName: string;
+
   private links: Links;
+
   public readonly declaredTypes: Set<string> = new Set();
+
   public readonly usedTypes: Set<string> = new Set();
-  constructor({
-    filePath,
-    links,
-  }: ProcessorConstructor) {
+
+  constructor({ filePath, links }: ProcessorConstructor) {
     this.filePath = filePath;
     this.links = links;
-    this.fileName = parse(this.filePath).name + (this.filePath.includes('ver2') ? '2' : '');
+    this.fileName = parse(this.filePath).name + (this.filePath.includes('ver2') ? '.2' : '');
   }
 
-  abstract process() : void;
+  abstract process(): Promise<void>;
 
   /**
    * Process the xml-file, generates all interface nodes and adds them to exportNodes
@@ -245,17 +281,19 @@ export abstract class Processor {
         imports[fileName] = [type];
       }
     }
-    const importNodes = Object.entries(imports).map(([fileName, types]) => ts.factory.createImportDeclaration(
-      undefined,
-      ts.factory.createImportClause(
-        false,
+    const importNodes = Object.entries(imports).map(([fileName, types]) =>
+      ts.factory.createImportDeclaration(
         undefined,
-        ts.factory.createNamedImports(
-          types.map((type) => ts.factory.createImportSpecifier(false, undefined, ts.factory.createIdentifier(type))),
+        ts.factory.createImportClause(
+          false,
+          undefined,
+          ts.factory.createNamedImports(
+            types.map((type) => ts.factory.createImportSpecifier(false, undefined, ts.factory.createIdentifier(type))),
+          ),
         ),
+        ts.factory.createStringLiteral(`./${fileName}`, true),
       ),
-      ts.factory.createStringLiteral(`./${fileName}`, true),
-    ));
+    );
     this.nodes.unshift(...importNodes, ts.factory.createIdentifier('\n'));
   }
 
@@ -266,44 +304,43 @@ export abstract class Processor {
     const nodeArr = ts.factory.createNodeArray(this.nodes);
 
     // printer for writing the AST to a file as code
-    const printer = ts.createPrinter({ newLine : ts.NewLineKind.LineFeed });
-    const result = printer.printList(
-      ts.ListFormat.MultiLine,
-      nodeArr,
-      sourceFile,
-    );
+    const printer = ts.createPrinter({ newLine: ts.NewLineKind.LineFeed });
+    const result = printer.printList(ts.ListFormat.MultiLine, nodeArr, sourceFile);
 
-    const eslint = new ESLint({
-      fix                : true,
-      overrideConfigFile : '.eslintrc.cjs',
+    const prettifiedResult = await format(result, {
+      parser: 'typescript',
+      singleQuote: true,
+      semi: true,
+      trailingComma: 'all',
+      arrowParens: 'always',
+      endOfLine: 'lf',
+      printWidth: 120,
     });
-    const lintedResult = await eslint.lintText(result, {
-      filePath : join(path, `${this.fileName}.ts`),
-    });
-    await ESLint.outputFixes(lintedResult);
 
     // write the code to file
     console.log(chalk.greenBright(`Save to ${join(path, `${this.fileName}.ts`)}`));
-    // writeFileSync(join(path, `${this.fileName}.ts`), resultText, { encoding : 'utf-8' });
+    writeFileSync(join(path, `${this.fileName}.ts`), prettifiedResult, { encoding: 'utf-8' });
   }
 
   async processXML() {
-    const xsdData = readFileSync(this.filePath, { encoding : 'utf-8' })
-      .replace(/<xs:documentation>([\s\S]*?)<\/xs:documentation>/g, (_, b) => `<xs:documentation><![CDATA[${b.replace(/(\s)+\n/, '\n')}]]></xs:documentation>`);
+    const xsdData = readFileSync(this.filePath, { encoding: 'utf-8' }).replace(
+      /<xs:documentation>([\s\S]*?)<\/xs:documentation>/g,
+      (_, b: string) => `<xs:documentation><![CDATA[${b.replace(/(\s)+\n/, '\n')}]]></xs:documentation>`,
+    );
 
     const xmlParser = new Parser({
-      attrkey : 'meta',
+      attrkey: 'meta',
     });
 
-    return xmlParser.parseStringPromise(xsdData);
+    return xmlParser.parseStringPromise(xsdData) as Promise<ISchemaDefinition>;
   }
 
-  static createAnnotationIfExists(attribute: any, node: any) {
+  static createAnnotationIfExists(attribute: IAttribute, node: ts.Node) {
     if (attribute['xs:annotation']) {
       return ts.addSyntheticLeadingComment(
         node,
         ts.SyntaxKind.MultiLineCommentTrivia,
-        `* ${attribute['xs:annotation']?.[0]['xs:documentation'][0]} `,
+        formatComment(attribute['xs:annotation']?.[0]['xs:documentation'][0]),
         true,
       );
     }
@@ -315,7 +352,7 @@ export abstract class Processor {
       // console.log(chalk.magentaBright(`${name} in ${this.links.get(name)!.name} already exists`));
     } else {
       this.links.set(name, {
-        name : this.fileName,
+        name: this.fileName,
       });
     }
     if (this.declaredTypes.has(name)) {
@@ -327,7 +364,7 @@ export abstract class Processor {
   }
 
   generateSimpleTypeInterface(simpleType: ISimpleType) {
-    const name = cleanName(simpleType.meta.name);
+    const name = cleanName(simpleType.meta.name!);
 
     // TODO type?
 
@@ -343,8 +380,11 @@ export abstract class Processor {
               exportModifier,
               interfaceSymbol, // interface name
               undefined,
-              ts.factory.createUnionTypeNode(simpleType['xs:restriction'][0]['xs:enumeration']
-                .map((enumValue) => ts.factory.createLiteralTypeNode(ts.factory.createStringLiteral(enumValue.meta.value, true)))),
+              ts.factory.createUnionTypeNode(
+                simpleType['xs:restriction'][0]['xs:enumeration'].map((enumValue) =>
+                  ts.factory.createLiteralTypeNode(ts.factory.createStringLiteral(enumValue.meta.value, true)),
+                ),
+              ),
             ),
           ),
         );
@@ -376,14 +416,16 @@ export abstract class Processor {
             exportModifier,
             interfaceSymbol,
             undefined,
-            ts.factory.createArrayTypeNode(ts.factory.createTypeReferenceNode(dataTypes(simpleType['xs:list'][0].meta.itemType))),
+            ts.factory.createArrayTypeNode(
+              ts.factory.createTypeReferenceNode(dataTypes(simpleType['xs:list'][0].meta.itemType)),
+            ),
           ),
         ),
       );
     }
   }
 
-  createProperty(attribute: any) {
+  createProperty(attribute: IAttribute) {
     const typeName = cleanName(dataTypes(attribute.meta.type));
     let type: TypeNode = ts.factory.createTypeReferenceNode(typeName);
     /** REFS FOR XMIME */
@@ -396,7 +438,7 @@ export abstract class Processor {
     }
     const property = ts.factory.createPropertySignature(
       undefined,
-      camelCase(attribute.meta.name),
+      camelCase(attribute.meta.name!),
       attribute.meta.use !== 'required' ? ts.factory.createToken(ts.SyntaxKind.QuestionToken) : undefined,
       type,
     );
@@ -410,7 +452,8 @@ export abstract class Processor {
   generateElementType(element: IElement) {
     if (element['xs:complexType'] && typeof element['xs:complexType'][0] === 'object') {
       element['xs:complexType'][0].meta = {
-        name : element.meta.name,
+        name: element.meta.name,
+        use: 'optional',
       };
       this.generateComplexTypeInterface(element['xs:complexType'][0]);
     }
@@ -421,9 +464,9 @@ export abstract class Processor {
 
   generateComplexTypeInterface(complexType: IComplexType) {
     const { name } = complexType.meta;
-    const interfaceSymbol = ts.factory.createIdentifier(cleanName(name));
+    const interfaceSymbol = ts.factory.createIdentifier(cleanName(name!));
 
-    let members: ts.TypeElement[] = [];
+    let members: ts.Node[] = [];
     let heritage;
 
     /** Complex Content */
@@ -437,15 +480,13 @@ export abstract class Processor {
       this.usedTypes.add(heritageName);
       heritage = extendInterface(heritageName);
       if (complexType['xs:sequence']) {
-        throw new Error('complexType[\'xs:sequence\'] in complexContent: complexType.meta.name');
+        throw new Error("complexType['xs:sequence'] in complexContent: complexType.meta.name");
       }
       complexType['xs:sequence'] = complexType['xs:complexContent'][0]['xs:extension'][0]['xs:sequence'];
     }
 
     if (complexType['xs:attribute']) {
-      members = members.concat(
-        complexType['xs:attribute'].map((attribute) => this.createProperty(attribute)),
-      );
+      members = members.concat(complexType['xs:attribute'].map((attribute) => this.createProperty(attribute)));
     }
     if (complexType['xs:sequence']) {
       if (!Array.isArray(complexType['xs:sequence'][0]['xs:element'])) {
@@ -460,7 +501,6 @@ export abstract class Processor {
         //     ),
         //   );
         // }
-
         // console.log(complexType);
         // console.log('--------------');
         // return ts.factory.createPropertySignature(
@@ -471,16 +511,16 @@ export abstract class Processor {
         // );
       } else {
         members = members.concat(
-          members = complexType['xs:sequence'][0]['xs:element'].map((attribute) => {
+          (members = complexType['xs:sequence'][0]['xs:element'].map((attribute) => {
             // console.log(attribute.meta.name);
             /** TODO complex type inside complex type */
             if (attribute['xs:complexType']) {
-              attribute['xs:complexType'][0].meta = { name : attribute.meta.name };
+              attribute['xs:complexType'][0].meta = { name: attribute.meta.name, use: 'optional' };
               this.generateComplexTypeInterface(attribute['xs:complexType'][0]);
               attribute.meta.type = `tt:${attribute.meta.name}`;
             }
             return this.createProperty(attribute);
-          }),
+          })),
         );
       }
     }
@@ -490,21 +530,19 @@ export abstract class Processor {
       interfaceSymbol, // interface name
       undefined, // no generic type parameters
       heritage,
-      members,
+      members as ts.TypeElement[],
     );
-    this.addNode(
-      name,
-      Processor.createAnnotationIfExists(complexType, node),
-    );
+    this.addNode(name!, Processor.createAnnotationIfExists(complexType, node));
   }
 }
 
 function extendInterface(interfaceName?: string) {
   if (interfaceName) {
-    return [ts.factory.createHeritageClause(
-      ts.SyntaxKind.ExtendsKeyword,
-      [ts.factory.createExpressionWithTypeArguments(ts.factory.createIdentifier(interfaceName), [])],
-    )];
+    return [
+      ts.factory.createHeritageClause(ts.SyntaxKind.ExtendsKeyword, [
+        ts.factory.createExpressionWithTypeArguments(ts.factory.createIdentifier(interfaceName), []),
+      ]),
+    ];
   }
   return undefined;
 }
@@ -529,7 +567,9 @@ interface IType {
 
 class InterfaceProcessor {
   private nodes: ts.Node[] = [];
+
   private links: Links = new Map();
+
   async start(sourcesPath: string, outPath: string) {
     const [builtInTypes, builtInLinks] = generateBuiltIns();
     this.nodes = builtInTypes;
@@ -541,9 +581,9 @@ class InterfaceProcessor {
     for (const xsd of xsds) {
       console.log(chalk.greenBright(`processing ${xsd}`));
       const proc = new ProcessorXSD({
-        filePath : xsd,
-        nodes    : this.nodes,
-        links    : this.links,
+        filePath: xsd,
+        nodes: this.nodes,
+        links: this.links,
       });
       processors.push(proc);
       const procNodes = await proc.prefix();
@@ -554,9 +594,9 @@ class InterfaceProcessor {
     for (const wdsl of wsdls) {
       console.log(chalk.greenBright(`processing ${wdsl}`));
       const proc = new ProcessorWSDL({
-        filePath : wdsl,
-        nodes    : this.nodes,
-        links    : this.links,
+        filePath: wdsl,
+        nodes: this.nodes,
+        links: this.links,
       });
       processors.push(proc);
       const procNodes = await proc.prefix();
@@ -571,23 +611,19 @@ class InterfaceProcessor {
     const nodeArr = ts.factory.createNodeArray(builtInTypes);
     // For all generated interfaces in one file
     // const nodeArr = ts.factory.createNodeArray(this.nodes);
-    const printer = ts.createPrinter({ newLine : ts.NewLineKind.LineFeed });
-    const result = printer.printList(
-      ts.ListFormat.MultiLine,
-      nodeArr,
-      sourceFile,
-    );
+    const printer = ts.createPrinter({ newLine: ts.NewLineKind.LineFeed });
+    const result = printer.printList(ts.ListFormat.MultiLine, nodeArr, sourceFile);
 
     // write the code to file
-    writeFileSync(join(outPath, `${BASICS_FILENAME}.ts`), result, { encoding : 'utf-8' });
+    writeFileSync(join(outPath, `${BASICS_FILENAME}.ts`), result, { encoding: 'utf-8' });
     console.log('Done!');
   }
 }
 
 const [, , sources, out] = process.argv;
 if (out !== undefined && lstatSync(sources).isDirectory()) {
-  mkdirSync(out, { recursive : true });
-  (new InterfaceProcessor()).start(sources, out).catch(console.error);
+  mkdirSync(out, { recursive: true });
+  new InterfaceProcessor().start(sources, out).catch(console.error);
 } else {
   console.log(`Usage: processor.ts <source> <output>
   <source> - ONVIF specs source directory
