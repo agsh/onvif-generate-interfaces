@@ -23,11 +23,10 @@ const exportModifier = ts.factory.createModifiersFromModifierFlags(ts.ModifierFl
 const generateBuiltIns = (): [ts.Node[], Links] => {
   const types = {
     AnyURI: 'string',
-    FilterType: 'any',
+    FilterType: 'object',
     NCName: 'string',
   };
   const builtInTypeNodes: ts.Node[] = [
-    ts.factory.createIdentifier('/* eslint-disable import/export, no-tabs */'),
     ...Object.entries(types).map(([name, typeName]) =>
       ts.factory.createTypeAliasDeclaration(
         exportModifier,
@@ -43,7 +42,7 @@ const generateBuiltIns = (): [ts.Node[], Links] => {
 
 function dataTypes(xsdType?: string): string {
   if (!xsdType) {
-    return 'any';
+    return 'unknown';
   }
   // const type = xsdType.slice(3);
   switch (xsdType) {
@@ -70,41 +69,41 @@ function dataTypes(xsdType?: string): string {
     case 'xs:anyURI':
       return 'AnyURI';
     case 'xs:anyType':
-      return 'any';
+      return 'unknown';
     case 'xs:hexBinary':
-      return 'any';
+      return 'unknown';
     case 'xs:base64Binary':
-      return 'any';
+      return 'unknown';
     case 'xs:duration':
-      return 'any';
-    case 'wsnt:FilterType':
-      return 'any';
+      return 'unknown';
+    // case 'wsnt:FilterType':
+    //   return 'unknown';
     case 'wsnt:NotificationMessageHolderType':
-      return 'any';
+      return 'unknown';
     case 'soapenv:Envelope':
-      return 'any';
+      return 'unknown';
     case 'soapenv:Fault':
-      return 'any';
+      return 'unknown';
     case 'xs:anySimpleType':
-      return 'any';
+      return 'unknown';
     case 'xs:QName':
-      return 'any';
+      return 'unknown';
     case 'wsnt:TopicExpressionType':
-      return 'any';
+      return 'unknown';
     case 'wsnt:QueryExpressionType':
-      return 'any';
+      return 'unknown';
     case 'wsnt:AbsoluteOrRelativeTimeType':
-      return 'any';
+      return 'unknown';
     case 'wsa:EndpointReferenceType':
-      return 'any';
+      return 'unknown';
     case 'mpqf:MpegQueryType':
-      return 'any';
+      return 'unknown';
     case 'xs:positiveInteger':
       return 'PositiveInteger';
     case 'xs:nonNegativeInteger':
       return 'number';
     case 'tt:Object':
-      return 'any';
+      return 'unknown';
     case 'xs:time':
       return 'Time';
     default:
@@ -493,6 +492,9 @@ export abstract class Processor {
     }
     if (complexType['xs:sequence']) {
       if (!Array.isArray(complexType['xs:sequence'][0]['xs:element'])) {
+        if (name === 'Capabilities') {
+          return;
+        }
         /** TODO Any */
         // if (complexType['xs:sequence'][0]['xs:any']) {
         //   members.push(
@@ -510,7 +512,7 @@ export abstract class Processor {
         //   undefined,
         //   complexType.meta.name,
         //   ts.factory.createToken(ts.SyntaxKind.QuestionToken),
-        //   ts.factory.createTypeReferenceNode('any'),
+        //   ts.factory.createTypeReferenceNode('unknown'),
         // );
       } else {
         members = members.concat(
@@ -581,6 +583,7 @@ class InterfaceProcessor {
     const processors = [];
 
     const xsds = await glob(join(sourcesPath, '/**/*.xsd'));
+    // const xsds = [];
     for (const xsd of xsds) {
       console.log(chalk.greenBright(`processing ${xsd}`));
       const proc = new ProcessorXSD({
@@ -594,6 +597,7 @@ class InterfaceProcessor {
     }
 
     const wsdls = await glob(join(sourcesPath, '/**/*.wsdl'));
+    // const wsdls = ['../specs/wsdl/ver10/device/wsdl/devicemgmt.wsdl'];
     for (const wdsl of wsdls) {
       console.log(chalk.greenBright(`processing ${wdsl}`));
       const proc = new ProcessorWSDL({
