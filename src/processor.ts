@@ -188,6 +188,8 @@ interface IComplexType extends IAttribute {
 interface IElement {
   meta: {
     name: string;
+    type?: string;
+    use: 'required' | 'optional';
   };
   'xs:complexType': IComplexType[];
 }
@@ -458,6 +460,26 @@ export abstract class Processor {
         use: 'optional',
       };
       this.generateComplexTypeInterface(element['xs:complexType'][0]);
+    } else {
+      if (element.meta.type) {
+        const name = cleanName(element.meta.name);
+        const extendsName = cleanName(element.meta.type);
+        const heritageName = extendsName.slice(extendsName.indexOf(':') + 1);
+        if (name === heritageName) {
+          // type inherits itself
+          return;
+        }
+        this.usedTypes.add(heritageName);
+        const heritage = extendInterface(heritageName);
+        const node = ts.factory.createInterfaceDeclaration(
+          exportModifier, // modifiers
+          ts.factory.createIdentifier(name), // interface name
+          undefined, // no generic type parameters
+          heritage,
+          [],
+        );
+        this.addNode(name, Processor.createAnnotationIfExists(element, node));
+      }
     }
     // TODO method descriptions?
     // element.meta
@@ -596,8 +618,9 @@ class InterfaceProcessor {
       this.nodes = this.nodes.concat(procNodes);
     }
 
-    const wsdls = await glob(join(sourcesPath, '/**/*.wsdl'));
+    // const wsdls = await glob(join(sourcesPath, '/**/*.wsdl'));
     // const wsdls = ['../specs/wsdl/ver10/device/wsdl/devicemgmt.wsdl'];
+    const wsdls = ['../specs/wsdl/ver20/media/wsdl/media.wsdl'];
     for (const wdsl of wsdls) {
       console.log(chalk.greenBright(`processing ${wdsl}`));
       const proc = new ProcessorWSDL({
@@ -610,9 +633,12 @@ class InterfaceProcessor {
       this.nodes = this.nodes.concat(procNodes);
     }
 
-    for (const proc of processors) {
+    // let index = `export * from './${BASICS_FILENAME}'\n`;
+
+    for (const proc of processors.reverse()) {
       proc.suffix(this.links);
       await proc.writeInterface(outPath);
+      // index += `export * from './${proc.fileName}';\n`;
     }
 
     const nodeArr = ts.factory.createNodeArray(builtInTypes);
@@ -623,6 +649,7 @@ class InterfaceProcessor {
 
     // write the code to file
     writeFileSync(join(outPath, `${BASICS_FILENAME}.ts`), result, { encoding: 'utf-8' });
+    // writeFileSync(join(outPath, 'index.ts'), index, { encoding: 'utf-8' });
     console.log('Done!');
   }
 }
