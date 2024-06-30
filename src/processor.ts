@@ -75,7 +75,7 @@ function dataTypes(xsdType?: string): string {
     case 'xs:base64Binary':
       return 'unknown';
     case 'xs:duration':
-      return 'unknown';
+      return 'string';
     // case 'wsnt:FilterType':
     //   return 'unknown';
     case 'wsnt:NotificationMessageHolderType':
@@ -469,8 +469,7 @@ export abstract class Processor {
           // type inherits itself
           return;
         }
-        this.usedTypes.add(heritageName);
-        const heritage = extendInterface(heritageName);
+        const heritage = this.extendInterface(heritageName);
         const node = ts.factory.createInterfaceDeclaration(
           exportModifier, // modifiers
           ts.factory.createIdentifier(name), // interface name
@@ -501,8 +500,7 @@ export abstract class Processor {
         // type inherits itself
         return;
       }
-      this.usedTypes.add(heritageName);
-      heritage = extendInterface(heritageName);
+      heritage = this.extendInterface(heritageName);
       if (complexType['xs:sequence']) {
         throw new Error("complexType['xs:sequence'] in complexContent: complexType.meta.name");
       }
@@ -561,17 +559,18 @@ export abstract class Processor {
     );
     this.addNode(name!, Processor.createAnnotationIfExists(complexType, node));
   }
-}
 
-function extendInterface(interfaceName?: string) {
-  if (interfaceName) {
-    return [
-      ts.factory.createHeritageClause(ts.SyntaxKind.ExtendsKeyword, [
-        ts.factory.createExpressionWithTypeArguments(ts.factory.createIdentifier(interfaceName), []),
-      ]),
-    ];
+  extendInterface(interfaceName?: string) {
+    if (interfaceName) {
+      this.usedTypes.add(interfaceName);
+      return [
+        ts.factory.createHeritageClause(ts.SyntaxKind.ExtendsKeyword, [
+          ts.factory.createExpressionWithTypeArguments(ts.factory.createIdentifier(interfaceName), []),
+        ]),
+      ];
+    }
+    return undefined;
   }
-  return undefined;
 }
 
 class ProcessorXSD extends Processor {
