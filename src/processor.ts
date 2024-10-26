@@ -166,6 +166,7 @@ interface IComplexType extends IAttribute {
         base: string;
       };
       'xs:sequence': never[];
+      'xs:attribute': never[];
     }[];
   }[];
   'xs:attribute'?: IAttribute[];
@@ -505,6 +506,9 @@ export abstract class Processor {
         throw new Error("complexType['xs:sequence'] in complexContent: complexType.meta.name");
       }
       complexType['xs:sequence'] = complexType['xs:complexContent'][0]['xs:extension'][0]['xs:sequence'];
+      if (complexType['xs:complexContent'][0]['xs:extension'][0]['xs:attribute']) {
+        complexType['xs:attribute'] = complexType['xs:complexContent'][0]['xs:extension'][0]['xs:attribute'];
+      }
     }
 
     if (complexType['xs:attribute']) {
@@ -604,6 +608,7 @@ class InterfaceProcessor {
     const processors = [];
 
     const xsds = await glob(join(sourcesPath, '/**/*.xsd'));
+    // const xsds = await glob(join(sourcesPath, '/**/onvif.xsd'));
     // const xsds = [];
     for (const xsd of xsds) {
       console.log(chalk.greenBright(`processing ${xsd}`));
@@ -617,9 +622,10 @@ class InterfaceProcessor {
       this.nodes = this.nodes.concat(procNodes);
     }
 
-    // const wsdls = await glob(join(sourcesPath, '/**/*.wsdl'));
+    const wsdls = await glob(join(sourcesPath, '/**/*.wsdl'));
     // const wsdls = ['../specs/wsdl/ver10/device/wsdl/devicemgmt.wsdl'];
-    const wsdls = ['../specs/wsdl/ver20/media/wsdl/media.wsdl'];
+    //const wsdls = ['../specs/wsdl/ver20/media/wsdl/media.wsdl'];
+    // const wsdls = [];
     for (const wdsl of wsdls) {
       console.log(chalk.greenBright(`processing ${wdsl}`));
       const proc = new ProcessorWSDL({
