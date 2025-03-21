@@ -463,7 +463,6 @@ export abstract class Processor {
       this.generateComplexTypeInterface(element['xs:complexType'][0]);
     } else {
       if (element.meta.type) {
-        console.log(element.meta.name, element.meta.type, this.fileName);
         // crutch and bicycle for 'Capabilities' in deviceMgmt
         if (
           this.fileName === 'devicemgmt' &&
