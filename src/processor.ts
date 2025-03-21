@@ -463,6 +463,14 @@ export abstract class Processor {
       this.generateComplexTypeInterface(element['xs:complexType'][0]);
     } else {
       if (element.meta.type) {
+        // crutch and bicycle for 'Capabilities' in deviceMgmt
+        if (
+          this.fileName === 'devicemgmt' &&
+          element.meta.name === 'Capabilities' &&
+          element.meta.type === 'tds:DeviceServiceCapabilities'
+        ) {
+          return ts.factory.createIdentifier("// 'Capabilities' in deviceMgmt");
+        }
         const name = cleanName(element.meta.name);
         const extendsName = cleanName(element.meta.type);
         const heritageName = extendsName.slice(extendsName.indexOf(':') + 1);
@@ -516,6 +524,7 @@ export abstract class Processor {
     }
     if (complexType['xs:sequence']) {
       if (!Array.isArray(complexType['xs:sequence'][0]['xs:element'])) {
+        // crutch and bicycle for 'Capabilities' somewhere (I don't remember)
         if (name === 'Capabilities') {
           return;
         }
@@ -541,7 +550,6 @@ export abstract class Processor {
       } else {
         members = members.concat(
           (members = complexType['xs:sequence'][0]['xs:element'].map((attribute) => {
-            // console.log(attribute.meta.name);
             /** TODO complex type inside complex type */
             if (attribute['xs:complexType']) {
               attribute['xs:complexType'][0].meta = { name: attribute.meta.name, use: 'optional' };
