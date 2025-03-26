@@ -134,6 +134,7 @@ interface IAttribute {
     name?: string;
     ref?: string;
     maxOccurs?: string;
+    minOccurs?: string;
     use: 'required' | 'optional';
   };
   'xs:annotation'?: {
@@ -444,7 +445,9 @@ export abstract class Processor {
     const property = ts.factory.createPropertySignature(
       undefined,
       camelCase(attribute.meta.name!),
-      attribute.meta.use !== 'required' ? ts.factory.createToken(ts.SyntaxKind.QuestionToken) : undefined,
+      attribute.meta.use !== 'required' && attribute.meta.minOccurs !== '1'
+        ? ts.factory.createToken(ts.SyntaxKind.QuestionToken)
+        : undefined,
       type,
     );
     if (typeName.charAt(0) === typeName.charAt(0).toUpperCase()) {
