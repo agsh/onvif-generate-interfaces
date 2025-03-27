@@ -343,12 +343,19 @@ export abstract class Processor {
 
   static createAnnotationIfExists(attribute: IAttribute, node: ts.Node) {
     if (attribute['xs:annotation']) {
-      return ts.addSyntheticLeadingComment(
-        node,
-        ts.SyntaxKind.MultiLineCommentTrivia,
-        formatComment(attribute['xs:annotation']?.[0]['xs:documentation'][0]),
-        true,
-      );
+      const annotation =
+        typeof attribute['xs:annotation']?.[0] === 'string'
+          ? // For these annotations
+            // <xs:annotation>
+            //   All hardware types specified are related to network devices supporting ONVIF specification.
+            // </xs:annotation>
+            attribute['xs:annotation']?.[0]
+          : // For these annotations
+            // <xs:annotation>
+            // 	 <xs:documentation>Multiple sensors device.</xs:documentation>
+            // </xs:annotation>
+            attribute['xs:annotation']?.[0]['xs:documentation'][0];
+      return ts.addSyntheticLeadingComment(node, ts.SyntaxKind.MultiLineCommentTrivia, formatComment(annotation), true);
     }
     return node;
   }
@@ -445,9 +452,14 @@ export abstract class Processor {
     const property = ts.factory.createPropertySignature(
       undefined,
       camelCase(attribute.meta.name!),
-      attribute.meta.use !== 'required' && attribute.meta.minOccurs !== '1'
-        ? ts.factory.createToken(ts.SyntaxKind.QuestionToken)
-        : undefined,
+      // attribute.meta.use !== 'required' && attribute.meta.minOccurs !== '1'
+      //   ? ts.factory.createToken(ts.SyntaxKind.QuestionToken)
+      //   : undefined,
+      attribute.meta.use === 'required' ||
+        attribute.meta.minOccurs === '1' ||
+        (!attribute.meta.minOccurs && !attribute.meta.maxOccurs)
+        ? undefined
+        : ts.factory.createToken(ts.SyntaxKind.QuestionToken),
       type,
     );
     if (typeName.charAt(0) === typeName.charAt(0).toUpperCase()) {
