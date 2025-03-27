@@ -455,9 +455,10 @@ export abstract class Processor {
       // attribute.meta.use !== 'required' && attribute.meta.minOccurs !== '1'
       //   ? ts.factory.createToken(ts.SyntaxKind.QuestionToken)
       //   : undefined,
-      attribute.meta.use === 'required' ||
+      (attribute.meta.use === 'required' ||
         attribute.meta.minOccurs === '1' ||
-        (!attribute.meta.minOccurs && !attribute.meta.maxOccurs)
+        (!attribute.meta.minOccurs && !attribute.meta.maxOccurs)) &&
+        attribute.meta.use !== 'optional'
         ? undefined
         : ts.factory.createToken(ts.SyntaxKind.QuestionToken),
       type,
