@@ -25,6 +25,7 @@ const generateBuiltIns = (): [ts.Node[], Links] => {
     AnyURI: 'string',
     FilterType: 'object',
     NCName: 'string',
+    Duration: 'string',
   };
   const builtInTypeNodes: ts.Node[] = [
     ...Object.entries(types).map(([name, typeName]) =>
@@ -75,7 +76,7 @@ function dataTypes(xsdType?: string): string {
     case 'xs:base64Binary':
       return 'unknown';
     case 'xs:duration':
-      return 'string';
+      return 'Duration';
     // case 'wsnt:FilterType':
     //   return 'unknown';
     case 'wsnt:NotificationMessageHolderType':
