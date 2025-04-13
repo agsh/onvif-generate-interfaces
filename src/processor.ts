@@ -537,7 +537,12 @@ export abstract class Processor {
     }
 
     if (complexType['xs:attribute']) {
-      members = members.concat(complexType['xs:attribute'].map((attribute) => this.createProperty(attribute)));
+      members = members.concat(complexType['xs:attribute'].map((attribute) => {
+        if (attribute.meta.use !== 'required') { // by default attributes are optional
+          attribute.meta.use = 'optional';
+        }
+        return this.createProperty(attribute);
+      }));
     }
     if (complexType['xs:sequence']) {
       if (!Array.isArray(complexType['xs:sequence'][0]['xs:element'])) {
