@@ -136,7 +136,9 @@ interface IAttribute {
     ref?: string;
     maxOccurs?: string;
     minOccurs?: string;
-    use: 'required' | 'optional';
+    use?: 'required' | 'optional';
+    namespace?: string;
+    processContents?: string;
   };
   'xs:annotation'?: {
     'xs:documentation': string[];
@@ -184,7 +186,15 @@ interface IComplexType extends IAttribute {
         'xs:documentation': string[];
       }[];
     }[];
-    'xs:any'?: never;
+    'xs:any'?: {
+      meta: {
+        namespace: string;
+        processContents: string;
+      };
+      'xs:annotation': {
+        'xs:documentation': string[];
+      }[];
+    }[];
   }[];
 }
 
@@ -535,7 +545,6 @@ export abstract class Processor {
         complexType['xs:attribute'] = complexType['xs:complexContent'][0]['xs:extension'][0]['xs:attribute'];
       }
     }
-
     if (complexType['xs:attribute']) {
       members = members.concat(complexType['xs:attribute'].map((attribute) => {
         if (attribute.meta.use !== 'required') { // by default attributes are optional
@@ -550,25 +559,21 @@ export abstract class Processor {
         if (name === 'Capabilities') {
           return;
         }
-        /** TODO Any */
-        // if (complexType['xs:sequence'][0]['xs:any']) {
-        //   members.push(
-        //     ts.factory.createPropertySignature(
-        //       undefined,
-        //       '[key: string]',
-        //       undefined,
-        //       ts.factory.createTypeReferenceNode('any'),
-        //     ),
-        //   );
-        // }
-        // console.log(complexType);
-        // console.log('--------------');
-        // return ts.factory.createPropertySignature(
-        //   undefined,
-        //   complexType.meta.name,
-        //   ts.factory.createToken(ts.SyntaxKind.QuestionToken),
-        //   ts.factory.createTypeReferenceNode('unknown'),
-        // );
+        if (complexType['xs:sequence'][0]['xs:any']
+          && complexType['xs:sequence'][0]['xs:any'][0].meta.namespace === '##any'
+        ) {
+          // cover all extensions (107 entries) with unknown fields
+          // Processor.createAnnotationIfExists
+          const property = ts.factory.createPropertySignature(
+            undefined,
+            '[key: string]',
+            undefined,
+            ts.factory.createTypeReferenceNode('unknown'),
+          );
+          members.push(
+            Processor.createAnnotationIfExists(complexType['xs:sequence'][0]['xs:any'][0], property)
+          );
+        }
       } else {
         members = members.concat(
           (members = complexType['xs:sequence'][0]['xs:element'].map((attribute) => {
