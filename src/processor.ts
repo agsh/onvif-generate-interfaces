@@ -23,7 +23,7 @@ const exportModifier = ts.factory.createModifiersFromModifierFlags(ts.ModifierFl
 const generateBuiltIns = (): [ts.Node[], Links] => {
   const types = {
     AnyURI: 'string',
-    FilterType: 'object',
+    FilterType: 'any',
     NCName: 'string',
     Duration: 'string',
   };
@@ -70,7 +70,7 @@ function dataTypes(xsdType?: string): string {
     case 'xs:anyURI':
       return 'AnyURI';
     case 'xs:anyType':
-      return 'unknown';
+      return 'any';
     case 'xs:hexBinary':
       return 'unknown';
     case 'xs:base64Binary':
@@ -545,6 +545,7 @@ export abstract class Processor {
         complexType['xs:attribute'] = complexType['xs:complexContent'][0]['xs:extension'][0]['xs:attribute'];
       }
     }
+
     if (complexType['xs:attribute']) {
       members = members.concat(complexType['xs:attribute'].map((attribute) => {
         if (attribute.meta.use !== 'required') { // by default attributes are optional
@@ -586,6 +587,23 @@ export abstract class Processor {
             return this.createProperty(attribute);
           })),
         );
+
+        if (complexType['xs:sequence'][0]['xs:any']
+          && complexType['xs:sequence'][0]['xs:any'][0].meta.namespace === '##any'
+        ) {
+          // cover all extensions (107 entries) with unknown fields
+          // Processor.createAnnotationIfExists
+          const property = ts.factory.createPropertySignature(
+            undefined,
+            '[key: string]',
+            undefined,
+            ts.factory.createTypeReferenceNode('unknown'),
+          );
+          members.push(
+            Processor.createAnnotationIfExists(complexType['xs:sequence'][0]['xs:any'][0], property)
+          );
+        }
+
       }
     }
 
