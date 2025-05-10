@@ -120,6 +120,9 @@ function cleanName(name: string): string {
 }
 
 function camelCase(name: string): string {
+  if (name.length === 1) {
+    return name.toLowerCase();
+  }
   const secondLetter = name.charAt(1);
   if (secondLetter && secondLetter.toUpperCase() !== secondLetter) {
     name = name.charAt(0).toLowerCase() + name.slice(1);
