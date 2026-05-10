@@ -463,6 +463,10 @@ export abstract class Processor {
     if (attribute.meta.maxOccurs === 'unbounded') {
       type = ts.factory.createArrayTypeNode(type);
     }
+    // hack for the profileToken (we use activeSource if it isn't provided)
+    if (attribute.meta?.name === 'ProfileToken') {
+      attribute.meta.use = 'optional';
+    }
     const property = ts.factory.createPropertySignature(
       undefined,
       camelCase(attribute.meta.name!),
