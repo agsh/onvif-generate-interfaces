@@ -70,7 +70,7 @@ function dataTypes(xsdType?: string): string {
     case 'xs:anyURI':
       return 'AnyURI';
     case 'xs:anyType':
-      return 'any';
+      return 'unknown';
     case 'xs:hexBinary':
       return 'unknown';
     case 'xs:base64Binary':
