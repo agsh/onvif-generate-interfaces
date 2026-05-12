@@ -70,7 +70,7 @@ function dataTypes(xsdType?: string): string {
     case 'xs:anyURI':
       return 'AnyURI';
     case 'xs:anyType':
-      return 'any';
+      return 'unknown';
     case 'xs:hexBinary':
       return 'unknown';
     case 'xs:base64Binary':
@@ -463,6 +463,10 @@ export abstract class Processor {
     if (attribute.meta.maxOccurs === 'unbounded') {
       type = ts.factory.createArrayTypeNode(type);
     }
+    // hack for the profileToken (we use activeSource if it isn't provided)
+    if (attribute.meta?.name === 'ProfileToken') {
+      attribute.meta.use = 'optional';
+    }
     const property = ts.factory.createPropertySignature(
       undefined,
       camelCase(attribute.meta.name!),
@@ -503,7 +507,7 @@ export abstract class Processor {
         }
         const name = cleanName(element.meta.name);
         const extendsName = cleanName(element.meta.type);
-        const heritageName = extendsName.slice(extendsName.indexOf(':') + 1);
+        const heritageName = cleanName(extendsName.slice(extendsName.indexOf(':') + 1));
         if (name === heritageName) {
           // type inherits itself
           return;
@@ -534,7 +538,7 @@ export abstract class Processor {
     /** Complex Content */
     if (Array.isArray(complexType['xs:complexContent'])) {
       const extendsName = complexType['xs:complexContent'][0]['xs:extension'][0].meta.base;
-      const heritageName = extendsName.slice(extendsName.indexOf(':') + 1);
+      const heritageName = cleanName(extendsName.slice(extendsName.indexOf(':') + 1));
       if (name === heritageName) {
         // type inherits itself
         return;
