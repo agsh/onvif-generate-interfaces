@@ -457,7 +457,8 @@ export abstract class Processor {
     let type: TypeNode = ts.factory.createTypeReferenceNode(typeName);
     /** REFS FOR XMIME */
     if (!attribute.meta.name && attribute.meta.ref) {
-      attribute.meta.name = attribute.meta.ref.slice(6);
+      // attribute.meta.name = attribute.meta.ref.slice(6);
+      attribute.meta.name = attribute.meta.ref.split(':')[1];
     }
     /** ARRAYS */
     if (attribute.meta.maxOccurs === 'unbounded') {
