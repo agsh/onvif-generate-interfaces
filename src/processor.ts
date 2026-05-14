@@ -291,16 +291,21 @@ export abstract class Processor {
    */
   suffix(links: Links) {
     const imports: Record<string, string[]> = {};
-    for (const type of this.usedTypes.difference(this.declaredTypes)) {
-      const fileName = links.get(type)?.name;
-      if (!fileName) {
-        console.warn(chalk.yellow(`Type ${type} not found in links`));
-      } else if (imports[fileName]) {
-        imports[fileName].push(type);
-      } else {
-        imports[fileName] = [type];
-      }
+    const typesToImport = this.usedTypes.difference(this.declaredTypes);
+    // hack to have native js-Date type for events
+    if (this.filePath.includes('event')){
+      typesToImport.delete('Date');
     }
+      for (const type of typesToImport) {
+        const fileName = links.get(type)?.name;
+        if (!fileName) {
+          console.warn(chalk.yellow(`Type ${type} not found in links`));
+        } else if (imports[fileName]) {
+          imports[fileName].push(type);
+        } else {
+          imports[fileName] = [type];
+        }
+      }
     const importNodes = Object.entries(imports).map(([fileName, types]) =>
       ts.factory.createImportDeclaration(
         undefined,
@@ -565,9 +570,9 @@ export abstract class Processor {
     if (complexType['xs:sequence']) {
       if (!Array.isArray(complexType['xs:sequence'][0]['xs:element'])) {
         // crutch and bicycle for 'Capabilities' somewhere (I don't remember)
-        if (name === 'Capabilities') {
-          return;
-        }
+        // if (name === 'Capabilities') {
+        //   return;
+        // }
         if (complexType['xs:sequence'][0]['xs:any']
           && complexType['xs:sequence'][0]['xs:any'][0].meta.namespace === '##any'
         ) {
