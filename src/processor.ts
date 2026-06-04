@@ -502,8 +502,15 @@ export abstract class Processor {
       };
       this.generateComplexTypeInterface(element['xs:complexType'][0]);
     } else {
-      if (element.meta.type) {
-        // crutch and bicycle for 'Capabilities' in deviceMgmt
+      if (element['xs:complexType'] && typeof element['xs:complexType'][0] === 'string') {
+        // hack for the empty complex types in WSDL
+        // ex. <xs:element name="ModifyAnalyticsModulesResponse">
+        // 				<xs:complexType/>
+        // 		 </xs:element>
+        element.meta.type = '';
+      }
+      if (element.meta.type !== undefined) {
+        // crutch and bicycle for 'Capabilities' in deviceMgmt TODO remove this?
         if (
           this.fileName === 'devicemgmt' &&
           element.meta.name === 'Capabilities' &&
