@@ -20,12 +20,20 @@ const sourceFile = ts.createSourceFile(
 // used for adding `export` directive to generated type
 const exportModifier = ts.factory.createModifiersFromModifierFlags(ts.ModifierFlags.Export);
 
+/** Native TS / utility names that must not be imported from generated modules. */
+const NATIVE_TYPES = new Set(['Date', 'Buffer', 'Promise', 'Array', 'Record', 'Map', 'Set']);
+
 const generateBuiltIns = (): [ts.Node[], Links] => {
+  // Aliases for XSD builtins that are referenced by name from dataTypes().
+  // PositiveInteger lives here (not only in types.xsd) so files that map
+  // xs:positiveInteger → PositiveInteger always resolve an import target.
+  // NOTE: do NOT add Time — tt:Time is a real complex type (hour/minute/second).
   const types = {
     AnyURI: 'string',
     FilterType: 'any',
     NCName: 'string',
     Duration: 'string',
+    PositiveInteger: 'number',
   };
   const builtInTypeNodes: ts.Node[] = [
     ...Object.entries(types).map(([name, typeName]) =>
@@ -40,6 +48,18 @@ const generateBuiltIns = (): [ts.Node[], Links] => {
   const builtInLinks: Links = new Map(Object.entries(types).map(([name]) => [name, { name: BASICS_FILENAME }]));
   return [builtInTypeNodes, builtInLinks];
 };
+
+/** True when a type name should be tracked for cross-file imports. */
+function needsImport(typeName: string): boolean {
+  if (!typeName || NATIVE_TYPES.has(typeName)) {
+    return false;
+  }
+  // primitives / keywords from dataTypes()
+  if (typeName === typeName.toLowerCase()) {
+    return false;
+  }
+  return true;
+}
 
 function dataTypes(xsdType?: string): string {
   if (!xsdType) {
@@ -106,7 +126,8 @@ function dataTypes(xsdType?: string): string {
     case 'tt:Object':
       return 'unknown';
     case 'xs:time':
-      return 'Time';
+      // Must not map to `Time`: tt:Time is an ONVIF complex type { hour, minute, second }.
+      return 'string';
     default:
       return xsdType.slice(xsdType.indexOf(':') + 1);
   }
@@ -381,7 +402,15 @@ export abstract class Processor {
 
   addNode(name: string, node: ts.Node) {
     if (this.links.has(name)) {
-      // console.log(chalk.magentaBright(`${name} in ${this.links.get(name)!.name} already exists`));
+      const owner = this.links.get(name)!.name;
+      // Only suppress redeclaration for true builtins from basics
+      // (e.g. PositiveInteger). Service-local names like Capabilities are
+      // intentionally repeated across WSDLs and must still be emitted here.
+      if (owner === BASICS_FILENAME && this.fileName !== BASICS_FILENAME) {
+        console.log(chalk.magentaBright(`${name} for ${this.fileName} already exists in ${owner}`));
+        return;
+      }
+      // First registration wins for import resolution; later files still export.
     } else {
       this.links.set(name, {
         name: this.fileName,
@@ -393,6 +422,44 @@ export abstract class Processor {
     }
     this.declaredTypes.add(name);
     this.nodes.push(node);
+  }
+
+  /** Record a referenced type so suffix() can emit the right import. */
+  trackUsedType(typeName: string) {
+    if (needsImport(typeName)) {
+      this.usedTypes.add(typeName);
+    }
+  }
+
+  /**
+   * Index signatures for xs:any namespace="##any" extension points.
+   * - `[key: string]` covers open XML element bags
+   * - `[key: symbol]` allows the onvif runtime `xsany = Symbol('any')` bag
+   *   (see onvif `toOnvifXMLSchemaObject.ts`) without TS2538
+   */
+  createExtensionIndexSignatures(anyNode: IAttribute): ts.TypeElement[] {
+    const unknownType = ts.factory.createKeywordTypeNode(ts.SyntaxKind.UnknownKeyword);
+    const makeIndex = (keyType: ts.KeywordTypeNode) =>
+      ts.factory.createIndexSignature(
+        undefined,
+        [
+          ts.factory.createParameterDeclaration(
+            undefined,
+            undefined,
+            ts.factory.createIdentifier('key'),
+            undefined,
+            keyType,
+          ),
+        ],
+        unknownType,
+      );
+
+    const stringIndex = Processor.createAnnotationIfExists(
+      anyNode,
+      makeIndex(ts.factory.createKeywordTypeNode(ts.SyntaxKind.StringKeyword)),
+    ) as ts.TypeElement;
+    const symbolIndex = makeIndex(ts.factory.createKeywordTypeNode(ts.SyntaxKind.SymbolKeyword));
+    return [stringIndex, symbolIndex];
   }
 
   generateSimpleTypeInterface(simpleType: ISimpleType) {
@@ -421,10 +488,8 @@ export abstract class Processor {
           ),
         );
       } else {
-        const typeName = dataTypes(simpleType['xs:restriction'][0].meta.base);
-        if (typeName.charAt(0) === typeName.charAt(0).toUpperCase()) {
-          this.usedTypes.add(typeName);
-        }
+        const typeName = cleanName(dataTypes(simpleType['xs:restriction'][0].meta.base));
+        this.trackUsedType(typeName);
         this.addNode(
           name,
           Processor.createAnnotationIfExists(
@@ -440,6 +505,8 @@ export abstract class Processor {
       }
     } else if (simpleType['xs:list']) {
       /** LISTS */
+      const itemTypeName = cleanName(dataTypes(simpleType['xs:list'][0].meta.itemType));
+      this.trackUsedType(itemTypeName);
       this.addNode(
         name,
         Processor.createAnnotationIfExists(
@@ -448,9 +515,7 @@ export abstract class Processor {
             exportModifier,
             interfaceSymbol,
             undefined,
-            ts.factory.createArrayTypeNode(
-              ts.factory.createTypeReferenceNode(dataTypes(simpleType['xs:list'][0].meta.itemType)),
-            ),
+            ts.factory.createArrayTypeNode(ts.factory.createTypeReferenceNode(itemTypeName)),
           ),
         ),
       );
@@ -487,9 +552,7 @@ export abstract class Processor {
         : ts.factory.createToken(ts.SyntaxKind.QuestionToken),
       type,
     );
-    if (typeName.charAt(0) === typeName.charAt(0).toUpperCase()) {
-      this.usedTypes.add(typeName);
-    }
+    this.trackUsedType(typeName);
     // console.log(chalk.yellow(`> ${attribute.meta.name} ${cleanName(dataTypes(attribute.meta.type))}`));
     return Processor.createAnnotationIfExists(attribute, property);
   }
@@ -558,7 +621,7 @@ export abstract class Processor {
       }
       heritage = this.extendInterface(heritageName);
       if (complexType['xs:sequence']) {
-        throw new Error("complexType['xs:sequence'] in complexContent: complexType.meta.name");
+        throw new Error(`complexType['xs:sequence'] in complexContent: ${name}`);
       }
       complexType['xs:sequence'] = complexType['xs:complexContent'][0]['xs:extension'][0]['xs:sequence'];
       if (complexType['xs:complexContent'][0]['xs:extension'][0]['xs:attribute']) {
@@ -575,29 +638,10 @@ export abstract class Processor {
       }));
     }
     if (complexType['xs:sequence']) {
-      if (!Array.isArray(complexType['xs:sequence'][0]['xs:element'])) {
-        // crutch and bicycle for 'Capabilities' somewhere (I don't remember)
-        // if (name === 'Capabilities') {
-        //   return;
-        // }
-        if (complexType['xs:sequence'][0]['xs:any']
-          && complexType['xs:sequence'][0]['xs:any'][0].meta.namespace === '##any'
-        ) {
-          // cover all extensions (107 entries) with unknown fields
-          // Processor.createAnnotationIfExists
-          const property = ts.factory.createPropertySignature(
-            undefined,
-            '[key: string]',
-            undefined,
-            ts.factory.createTypeReferenceNode('unknown'),
-          );
-          members.push(
-            Processor.createAnnotationIfExists(complexType['xs:sequence'][0]['xs:any'][0], property)
-          );
-        }
-      } else {
+      const sequence = complexType['xs:sequence'][0];
+      if (Array.isArray(sequence['xs:element'])) {
         members = members.concat(
-          (members = complexType['xs:sequence'][0]['xs:element'].map((attribute) => {
+          sequence['xs:element'].map((attribute) => {
             /** TODO complex type inside complex type */
             if (attribute['xs:complexType']) {
               attribute['xs:complexType'][0].meta = { name: attribute.meta.name, use: 'optional' };
@@ -605,25 +649,12 @@ export abstract class Processor {
               attribute.meta.type = `tt:${attribute.meta.name}`;
             }
             return this.createProperty(attribute);
-          })),
+          }),
         );
-
-        if (complexType['xs:sequence'][0]['xs:any']
-          && complexType['xs:sequence'][0]['xs:any'][0].meta.namespace === '##any'
-        ) {
-          // cover all extensions (107 entries) with unknown fields
-          // Processor.createAnnotationIfExists
-          const property = ts.factory.createPropertySignature(
-            undefined,
-            '[key: string]',
-            undefined,
-            ts.factory.createTypeReferenceNode('unknown'),
-          );
-          members.push(
-            Processor.createAnnotationIfExists(complexType['xs:sequence'][0]['xs:any'][0], property)
-          );
-        }
-
+      }
+      // cover xs:any ##any extension points with string + symbol index signatures
+      if (sequence['xs:any'] && sequence['xs:any'][0].meta.namespace === '##any') {
+        members.push(...this.createExtensionIndexSignatures(sequence['xs:any'][0]));
       }
     }
 
@@ -639,7 +670,7 @@ export abstract class Processor {
 
   extendInterface(interfaceName?: string) {
     if (interfaceName) {
-      this.usedTypes.add(interfaceName);
+      this.trackUsedType(interfaceName);
       return [
         ts.factory.createHeritageClause(ts.SyntaxKind.ExtendsKeyword, [
           ts.factory.createExpressionWithTypeArguments(ts.factory.createIdentifier(interfaceName), []),
