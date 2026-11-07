@@ -23,4 +23,21 @@ export interface PTZStatus {
 export interface GetStatus {
   profileToken?: ReferenceToken;
   count?: PositiveInteger;
+  tracked?: OnvifObject;
+}
+export interface SerialData {
+  binary?: unknown;
+  string?: string;
+}
+export interface MetadataStream {
+  PTZ?: PTZStatus[];
+  event?: string[];
+  [key: string]: unknown;
+  [key: symbol]: unknown;
+}
+export interface PresetDetail {
+  presetToken?: ReferenceToken;
+  home?: boolean;
+  [key: string]: unknown;
+  [key: symbol]: unknown;
 }

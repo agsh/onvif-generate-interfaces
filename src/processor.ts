@@ -72,81 +72,86 @@ function needsImport(typeName: string): boolean {
   return true;
 }
 
+/**
+ * Explicit XSD → TS mappings (builtins / known foreign types).
+ * Returns `undefined` when the QName should be treated as a schema-local type name.
+ */
+function mapBuiltin(xsdType: string): string | undefined {
+  switch (xsdType) {
+    case 'xs:double':
+    case 'xs:float':
+    case 'xs:int':
+    case 'xs:integer':
+    case 'xs:short':
+    case 'xs:signedInt':
+    case 'xs:unsignedInt':
+    case 'xs:unsignedShort':
+    case 'xs:nonNegativeInteger':
+      return 'number';
+    case 'xs:dateTime':
+      // Native JS Date — must NOT pass through renameTypes (tt:Date → OnvifDate)
+      return 'Date';
+    case 'xs:token':
+    case 'xs:time':
+      // xs:time must not map to tt:Time { hour, minute, second }
+      return 'string';
+    case 'xs:anyURI':
+      return 'AnyURI';
+    case 'xs:duration':
+      return 'Duration';
+    case 'xs:positiveInteger':
+      return 'PositiveInteger';
+    case 'xs:anyType':
+    case 'xs:hexBinary':
+    case 'xs:base64Binary':
+    case 'xs:anySimpleType':
+    case 'xs:QName':
+    case 'wsnt:NotificationMessageHolderType':
+    case 'wsnt:TopicExpressionType':
+    case 'wsnt:QueryExpressionType':
+    case 'wsnt:AbsoluteOrRelativeTimeType':
+    case 'soapenv:Envelope':
+    case 'soapenv:Fault':
+    case 'wsa:EndpointReferenceType':
+    case 'mpqf:MpegQueryType':
+      return 'unknown';
+    default:
+      return undefined;
+  }
+}
+
 function dataTypes(xsdType?: string): string {
   if (!xsdType) {
     return 'unknown';
   }
-  // const type = xsdType.slice(3);
-  switch (xsdType) {
-    case 'xs:double':
-      return 'number';
-    case 'xs:float':
-      return 'number';
-    case 'xs:int':
-      return 'number';
-    case 'xs:integer':
-      return 'number';
-    case 'xs:short':
-      return 'number';
-    case 'xs:signedInt':
-      return 'number';
-    case 'xs:unsignedInt':
-      return 'number';
-    case 'xs:unsignedShort':
-      return 'number';
-    case 'xs:dateTime':
-      return 'Date';
-    case 'xs:token':
-      return 'string';
-    case 'xs:anyURI':
-      return 'AnyURI';
-    case 'xs:anyType':
-      return 'unknown';
-    case 'xs:hexBinary':
-      return 'unknown';
-    case 'xs:base64Binary':
-      return 'unknown';
-    case 'xs:duration':
-      return 'Duration';
-    // case 'wsnt:FilterType':
-    //   return 'unknown';
-    case 'wsnt:NotificationMessageHolderType':
-      return 'unknown';
-    case 'soapenv:Envelope':
-      return 'unknown';
-    case 'soapenv:Fault':
-      return 'unknown';
-    case 'xs:anySimpleType':
-      return 'unknown';
-    case 'xs:QName':
-      return 'unknown';
-    case 'wsnt:TopicExpressionType':
-      return 'unknown';
-    case 'wsnt:QueryExpressionType':
-      return 'unknown';
-    case 'wsnt:AbsoluteOrRelativeTimeType':
-      return 'unknown';
-    case 'wsa:EndpointReferenceType':
-      return 'unknown';
-    case 'mpqf:MpegQueryType':
-      return 'unknown';
-    case 'xs:positiveInteger':
-      return 'PositiveInteger';
-    case 'xs:nonNegativeInteger':
-      return 'number';
-    case 'tt:Object':
-      return 'unknown';
-    case 'xs:time':
-      // Must not map to `Time`: tt:Time is an ONVIF complex type { hour, minute, second }.
-      return 'string';
-    default:
-      return xsdType.slice(xsdType.indexOf(':') + 1);
+  const builtin = mapBuiltin(xsdType);
+  if (builtin !== undefined) {
+    return builtin;
   }
+  // Namespace-aware: strip only the prefix (`tt:Foo` → `Foo`)
+  return xsdType.includes(':') ? xsdType.slice(xsdType.indexOf(':') + 1) : xsdType;
 }
 
 function cleanName(name: string, overrides: GeneratorOverrides = emptyOverrides): string {
   const renamed = renameType(name, overrides);
   return renamed.replace(/[-.]/g, '');
+}
+
+/**
+ * Resolve an XSD QName / builtin to the TypeScript type name used in generated code.
+ * Builtin mappings (xs:dateTime → Date, …) are returned as-is.
+ * Schema-local names get renameTypes (Object → OnvifObject, Date → OnvifDate).
+ */
+function resolveTypeRef(xsdType: string | undefined, overrides: GeneratorOverrides): string {
+  if (!xsdType) {
+    return 'unknown';
+  }
+  const builtin = mapBuiltin(xsdType);
+  if (builtin !== undefined) {
+    return builtin;
+  }
+  const local = xsdType.includes(':') ? xsdType.slice(xsdType.indexOf(':') + 1) : xsdType;
+  return cleanName(local, overrides);
 }
 
 function camelCase(name: string): string {
@@ -196,39 +201,61 @@ interface ISimpleType extends IAttribute {
   }[];
 }
 
+/** Element particle as produced by xml2js (sequence / choice children). */
+interface IElementParticle extends IAttribute {
+  meta: IAttribute['meta'] & {
+    name?: string;
+    type?: string;
+    use?: 'required' | 'optional';
+  };
+  'xs:complexType'?: IComplexType[];
+  'xs:annotation'?: {
+    'xs:documentation': string[];
+  }[];
+}
+
+interface IAnyParticle {
+  meta: {
+    namespace: string;
+    processContents: string;
+    minOccurs?: string;
+    maxOccurs?: string;
+  };
+  'xs:annotation'?: {
+    'xs:documentation': string[];
+  }[];
+}
+
+interface IChoice {
+  meta?: {
+    minOccurs?: string;
+    maxOccurs?: string;
+  };
+  'xs:element'?: IElementParticle[];
+  'xs:any'?: IAnyParticle[];
+}
+
+interface ISequence {
+  'xs:element'?: IElementParticle[];
+  'xs:choice'?: IChoice[];
+  'xs:any'?: IAnyParticle[];
+}
+
 interface IComplexType extends IAttribute {
   'xs:complexContent': {
     'xs:extension': {
       meta: {
         base: string;
       };
-      'xs:sequence': never[];
-      'xs:attribute': never[];
+      'xs:sequence'?: ISequence[];
+      'xs:choice'?: IChoice[];
+      'xs:attribute'?: IAttribute[];
     }[];
   }[];
   'xs:attribute'?: IAttribute[];
-  'xs:sequence'?: {
-    'xs:element': {
-      meta: {
-        name: string;
-        type: string;
-        use: 'required' | 'optional';
-      };
-      'xs:complexType'?: IComplexType[];
-      'xs:annotation': {
-        'xs:documentation': string[];
-      }[];
-    }[];
-    'xs:any'?: {
-      meta: {
-        namespace: string;
-        processContents: string;
-      };
-      'xs:annotation': {
-        'xs:documentation': string[];
-      }[];
-    }[];
-  }[];
+  'xs:sequence'?: ISequence[];
+  /** Top-level choice (e.g. VideoAnalyticsStream, SerialData) */
+  'xs:choice'?: IChoice[];
 }
 
 interface IElement {
@@ -507,7 +534,7 @@ export abstract class Processor {
           ),
         );
       } else {
-        const typeName = this.clean(dataTypes(simpleType['xs:restriction'][0].meta.base));
+        const typeName = resolveTypeRef(simpleType['xs:restriction'][0].meta.base, this.overrides);
         this.trackUsedType(typeName);
         this.addNode(
           name,
@@ -524,7 +551,7 @@ export abstract class Processor {
       }
     } else if (simpleType['xs:list']) {
       /** LISTS */
-      const itemTypeName = this.clean(dataTypes(simpleType['xs:list'][0].meta.itemType));
+      const itemTypeName = resolveTypeRef(simpleType['xs:list'][0].meta.itemType, this.overrides);
       this.trackUsedType(itemTypeName);
       this.addNode(
         name,
@@ -541,27 +568,41 @@ export abstract class Processor {
     }
   }
 
-  createProperty(attribute: IAttribute) {
-    const typeName = this.clean(dataTypes(attribute.meta.type));
-    let type: TypeNode = ts.factory.createTypeReferenceNode(typeName);
-    /** REFS FOR XMIME */
-    if (!attribute.meta.name && attribute.meta.ref) {
-      attribute.meta.name = attribute.meta.ref.split(':')[1];
+  /**
+   * Normalize ref/name on an element or attribute particle.
+   * `ref="wsnt:NotificationMessage"` → property name from the QName local part.
+   * Type is left unset for foreign refs (wsnt/xmime/…) → `unknown`; those schemas
+   * are not generated. Same-schema refs that carry an explicit `type=` are unchanged.
+   */
+  normalizeParticle(attribute: IAttribute): void {
+    if (attribute.meta.ref && !attribute.meta.name) {
+      attribute.meta.name = attribute.meta.ref.includes(':')
+        ? attribute.meta.ref.slice(attribute.meta.ref.indexOf(':') + 1)
+        : attribute.meta.ref;
     }
+  }
+
+  createProperty(
+    attribute: IAttribute,
+    options: { forceOptional?: boolean; forceArray?: boolean } = {},
+  ) {
+    this.normalizeParticle(attribute);
+    const typeName = resolveTypeRef(attribute.meta.type, this.overrides);
+    let type: TypeNode = ts.factory.createTypeReferenceNode(typeName);
     /** ARRAYS */
-    if (attribute.meta.maxOccurs === 'unbounded') {
+    if (attribute.meta.maxOccurs === 'unbounded' || options.forceArray) {
       type = ts.factory.createArrayTypeNode(type);
     }
 
     const useOverride = fieldUseOverride(this.fileName, attribute.meta.name, this.overrides);
-    const effectiveUse = useOverride ?? attribute.meta.use;
+    const effectiveUse = options.forceOptional ? 'optional' : (useOverride ?? attribute.meta.use);
 
     const property = ts.factory.createPropertySignature(
       undefined,
       camelCase(attribute.meta.name!),
       (effectiveUse === 'required' ||
         attribute.meta.minOccurs === '1' ||
-        (!attribute.meta.minOccurs && !attribute.meta.maxOccurs)) &&
+        (!attribute.meta.minOccurs && !attribute.meta.maxOccurs && !options.forceOptional)) &&
         effectiveUse !== 'optional'
         ? undefined
         : ts.factory.createToken(ts.SyntaxKind.QuestionToken),
@@ -569,6 +610,56 @@ export abstract class Processor {
     );
     this.trackUsedType(typeName);
     return Processor.createAnnotationIfExists(attribute, property);
+  }
+
+  /** Emit members for an xs:choice — all branches optional; unbounded choice → arrays. */
+  appendChoiceMembers(choice: IChoice, members: ts.Node[]) {
+    const unbounded = choice.meta?.maxOccurs === 'unbounded';
+    if (Array.isArray(choice['xs:element'])) {
+      for (const element of choice['xs:element']) {
+        if (element['xs:complexType']) {
+          element['xs:complexType'][0].meta = { name: element.meta.name, use: 'optional' };
+          this.generateComplexTypeInterface(element['xs:complexType'][0]);
+          // Local nested type — no namespace prefix; resolveTypeRef keeps the local name
+          element.meta.type = element.meta.name;
+        }
+        members.push(
+          this.createProperty(element, {
+            forceOptional: true,
+            forceArray: unbounded && element.meta.maxOccurs !== '1',
+          }),
+        );
+      }
+    }
+    if (choice['xs:any']?.[0]?.meta.namespace === '##any') {
+      members.push(...this.createExtensionIndexSignatures(choice['xs:any'][0]));
+    }
+  }
+
+  appendAnyMembers(anyParticles: IAnyParticle[] | undefined, members: ts.Node[]) {
+    if (anyParticles?.[0]?.meta.namespace === '##any') {
+      members.push(...this.createExtensionIndexSignatures(anyParticles[0]));
+    }
+  }
+
+  /** Walk sequence particles: elements, nested choices, xs:any. */
+  appendSequenceMembers(sequence: ISequence, members: ts.Node[]) {
+    if (Array.isArray(sequence['xs:element'])) {
+      for (const attribute of sequence['xs:element']) {
+        if (attribute['xs:complexType']) {
+          attribute['xs:complexType'][0].meta = { name: attribute.meta.name, use: 'optional' };
+          this.generateComplexTypeInterface(attribute['xs:complexType'][0]);
+          attribute.meta.type = attribute.meta.name;
+        }
+        members.push(this.createProperty(attribute));
+      }
+    }
+    if (Array.isArray(sequence['xs:choice'])) {
+      for (const choice of sequence['xs:choice']) {
+        this.appendChoiceMembers(choice, members);
+      }
+    }
+    this.appendAnyMembers(sequence['xs:any'], members);
   }
 
   generateElementType(element: IElement) {
@@ -589,8 +680,24 @@ export abstract class Processor {
           return;
         }
         const name = this.clean(element.meta.name);
-        const extendsName = this.clean(element.meta.type);
-        const heritageName = this.clean(extendsName.slice(extendsName.indexOf(':') + 1));
+        // Empty <xs:complexType/> → empty interface, no heritage
+        if (element.meta.type === '') {
+          this.addNode(
+            name,
+            Processor.createAnnotationIfExists(
+              element,
+              ts.factory.createInterfaceDeclaration(
+                exportModifier,
+                ts.factory.createIdentifier(name),
+                undefined,
+                undefined,
+                [],
+              ),
+            ),
+          );
+          return;
+        }
+        const heritageName = resolveTypeRef(element.meta.type, this.overrides);
         if (name === heritageName) {
           // type inherits itself
           return;
@@ -609,8 +716,9 @@ export abstract class Processor {
   }
 
   generateComplexTypeInterface(complexType: IComplexType) {
-    const { name } = complexType.meta;
-    const interfaceSymbol = ts.factory.createIdentifier(this.clean(name!));
+    const rawName = complexType.meta.name!;
+    const name = this.clean(rawName);
+    const interfaceSymbol = ts.factory.createIdentifier(name);
 
     let members: ts.Node[] = [];
     let heritage;
@@ -618,18 +726,20 @@ export abstract class Processor {
     /** Complex Content */
     if (Array.isArray(complexType['xs:complexContent'])) {
       const extendsName = complexType['xs:complexContent'][0]['xs:extension'][0].meta.base;
-      const heritageName = this.clean(extendsName.slice(extendsName.indexOf(':') + 1));
+      const heritageName = resolveTypeRef(extendsName, this.overrides);
       if (name === heritageName) {
         // type inherits itself
         return;
       }
       heritage = this.extendInterface(heritageName);
-      if (complexType['xs:sequence']) {
-        throw new Error(`complexType['xs:sequence'] in complexContent: ${name}`);
+      if (complexType['xs:sequence'] || complexType['xs:choice']) {
+        throw new Error(`complexType has sequence/choice alongside complexContent: ${name}`);
       }
-      complexType['xs:sequence'] = complexType['xs:complexContent'][0]['xs:extension'][0]['xs:sequence'];
-      if (complexType['xs:complexContent'][0]['xs:extension'][0]['xs:attribute']) {
-        complexType['xs:attribute'] = complexType['xs:complexContent'][0]['xs:extension'][0]['xs:attribute'];
+      const extension = complexType['xs:complexContent'][0]['xs:extension'][0];
+      complexType['xs:sequence'] = extension['xs:sequence'];
+      complexType['xs:choice'] = extension['xs:choice'];
+      if (extension['xs:attribute']) {
+        complexType['xs:attribute'] = extension['xs:attribute'];
       }
     }
 
@@ -641,25 +751,16 @@ export abstract class Processor {
         return this.createProperty(attribute);
       }));
     }
+
+    // Top-level choice (SerialData, VideoAnalyticsStream, …)
+    if (Array.isArray(complexType['xs:choice'])) {
+      for (const choice of complexType['xs:choice']) {
+        this.appendChoiceMembers(choice, members);
+      }
+    }
+
     if (complexType['xs:sequence']) {
-      const sequence = complexType['xs:sequence'][0];
-      if (Array.isArray(sequence['xs:element'])) {
-        members = members.concat(
-          sequence['xs:element'].map((attribute) => {
-            /** TODO complex type inside complex type */
-            if (attribute['xs:complexType']) {
-              attribute['xs:complexType'][0].meta = { name: attribute.meta.name, use: 'optional' };
-              this.generateComplexTypeInterface(attribute['xs:complexType'][0]);
-              attribute.meta.type = `tt:${attribute.meta.name}`;
-            }
-            return this.createProperty(attribute);
-          }),
-        );
-      }
-      // cover xs:any ##any extension points (key kinds from overrides)
-      if (sequence['xs:any'] && sequence['xs:any'][0].meta.namespace === '##any') {
-        members.push(...this.createExtensionIndexSignatures(sequence['xs:any'][0]));
-      }
+      this.appendSequenceMembers(complexType['xs:sequence'][0], members);
     }
 
     const node = ts.factory.createInterfaceDeclaration(
@@ -669,7 +770,7 @@ export abstract class Processor {
       heritage,
       members as ts.TypeElement[],
     );
-    this.addNode(name!, Processor.createAnnotationIfExists(complexType, node));
+    this.addNode(name, Processor.createAnnotationIfExists(complexType, node));
   }
 
   extendInterface(interfaceName?: string) {

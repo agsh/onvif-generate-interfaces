@@ -81,6 +81,8 @@ export const onvifOverrides: GeneratorOverrides = {
   renameTypes: {
     // JS / DOM `Object` would shadow; keep ONVIF analytics object under a distinct name
     Object: 'OnvifObject',
+    // Collides with native JS `Date` used for xs:dateTime — tt:Date is { year, month, day }
+    Date: 'OnvifDate',
   },
 
   fields: [
@@ -102,7 +104,7 @@ export const onvifOverrides: GeneratorOverrides = {
 
   suppressImports: [
     {
-      // Event payloads use native JS Date from xs:dateTime — do not import a generated Date
+      // Belt-and-suspenders: xs:dateTime → native Date (NATIVE_TYPES); never import OnvifDate as Date
       filePathIncludes: 'event',
       types: ['Date'],
     },

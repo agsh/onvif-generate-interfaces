@@ -9,7 +9,8 @@
  *   UPDATE_GOLDENS=1 npm test
  *
  * What the fixtures exercise (see comments inside each .xsd/.wsdl):
- *  - mini.xsd      — enums, lists, extension, xs:any, ProfileToken, Object→OnvifObject
+ *  - mini.xsd      — enums, lists, extension, xs:any, ProfileToken, Object→OnvifObject,
+ *                    xs:choice (top-level + in sequence + unbounded), tt:Object QName
  *  - ptz.wsdl      — ver20 → ptz.2.ts naming, Capabilities, empty complexType
  *  - devicemgmt    — skipElements for Capabilities alias
  *  - event.wsdl    — suppressImports keeps native Date (no Date import)
@@ -104,6 +105,8 @@ describe('generator golden snapshots', () => {
     assert.match(mini, /profileToken\?:/);
     assert.match(mini, /export interface OnvifObject/);
     assert.doesNotMatch(mini, /export interface Object\b/);
+    // tt:Object reference resolves via namespace strip + renameTypes
+    assert.match(mini, /tracked\?: OnvifObject/);
 
     assert.match(mini, /\[key: string\]: unknown/);
     assert.match(mini, /\[key: symbol\]: unknown/);
@@ -118,5 +121,19 @@ describe('generator golden snapshots', () => {
 
     assert.match(ptz, /export interface Capabilities/);
     assert.match(ptz, /profileToken\?:/);
+  });
+
+  it('maps xs:choice: optional branches, unbounded → arrays', () => {
+    const mini = readFileSync(join(outDir, 'mini.ts'), 'utf8');
+
+    // Top-level choice → exclusive optional fields
+    assert.match(mini, /export interface SerialData \{[^}]*binary\?: unknown;[^}]*string\?: string;/s);
+
+    // Unbounded choice in sequence → array fields + index signatures from xs:any
+    // "PTZ" keeps leading capitals (second char is uppercase) → property name PTZ
+    assert.match(mini, /export interface MetadataStream \{[^}]*PTZ\?: PTZStatus\[\];[^}]*event\?: string\[\];/s);
+
+    // Exclusive choice + sibling xs:any
+    assert.match(mini, /export interface PresetDetail \{[^}]*presetToken\?: ReferenceToken;[^}]*home\?: boolean;/s);
   });
 });
