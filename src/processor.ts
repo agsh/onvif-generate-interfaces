@@ -3,8 +3,9 @@ import { Parser } from 'xml2js';
 import ts, { TypeNode } from 'typescript';
 import { glob } from 'glob';
 import chalk from 'chalk';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { mkdirSync } from 'node:fs';
+import { pathToFileURL } from 'node:url';
 import { format } from 'prettier';
 import {
   applySuppressImports,
@@ -359,7 +360,7 @@ export abstract class Processor {
   /**
    * Generate interface file at given path
    */
-  async writeInterface(path: string) {
+  async writeInterface(path: string, options: { silent?: boolean } = {}) {
     const nodeArr = ts.factory.createNodeArray(this.nodes);
 
     // printer for writing the AST to a file as code
@@ -377,7 +378,9 @@ export abstract class Processor {
     });
 
     // write the code to file
-    console.log(chalk.greenBright(`Save to ${join(path, `${this.fileName}.ts`)}`));
+    if (!options.silent) {
+      console.log(chalk.greenBright(`Save to ${join(path, `${this.fileName}.ts`)}`));
+    }
     writeFileSync(join(path, `${this.fileName}.ts`), prettifiedResult, { encoding: 'utf-8' });
   }
 
@@ -700,12 +703,31 @@ interface IType {
   name?: string;
 }
 
-class InterfaceProcessor {
+export interface InterfaceProcessorOptions {
+  overrides?: GeneratorOverrides;
+  /** Suppress progress logs (used by snapshot tests). */
+  silent?: boolean;
+}
+
+export class InterfaceProcessor {
   private nodes: ts.Node[] = [];
 
   private links: Links = new Map();
 
-  constructor(private readonly overrides: GeneratorOverrides = onvifOverrides) {}
+  private readonly overrides: GeneratorOverrides;
+
+  private readonly silent: boolean;
+
+  constructor(options: InterfaceProcessorOptions = {}) {
+    this.overrides = options.overrides ?? onvifOverrides;
+    this.silent = options.silent ?? false;
+  }
+
+  private log(message: string) {
+    if (!this.silent) {
+      console.log(message);
+    }
+  }
 
   async start(sourcesPath: string, outPath: string) {
     const [builtInTypes, builtInLinks] = generateBuiltIns();
@@ -716,7 +738,7 @@ class InterfaceProcessor {
 
     const xsds = await glob(join(sourcesPath, '/**/*.xsd'));
     for (const xsd of xsds) {
-      console.log(chalk.greenBright(`processing ${xsd}`));
+      this.log(chalk.greenBright(`processing ${xsd}`));
       const proc = new ProcessorXSD({
         filePath: xsd,
         nodes: this.nodes,
@@ -730,7 +752,7 @@ class InterfaceProcessor {
 
     const wsdls = await glob(join(sourcesPath, '/**/*.wsdl'));
     for (const wdsl of wsdls) {
-      console.log(chalk.greenBright(`processing ${wdsl}`));
+      this.log(chalk.greenBright(`processing ${wdsl}`));
       const proc = new ProcessorWSDL({
         filePath: wdsl,
         nodes: this.nodes,
@@ -742,35 +764,42 @@ class InterfaceProcessor {
       this.nodes = this.nodes.concat(procNodes);
     }
 
-    // let index = `export * from './${BASICS_FILENAME}'\n`;
-
     for (const proc of processors.reverse()) {
       proc.suffix(this.links);
-      await proc.writeInterface(outPath);
-      // index += `export * from './${proc.fileName}';\n`;
+      await proc.writeInterface(outPath, { silent: this.silent });
     }
 
     const nodeArr = ts.factory.createNodeArray(builtInTypes);
-    // For all generated interfaces in one file
-    // const nodeArr = ts.factory.createNodeArray(this.nodes);
     const printer = ts.createPrinter({ newLine: ts.NewLineKind.LineFeed });
     const result = printer.printList(ts.ListFormat.MultiLine, nodeArr, sourceFile);
 
-    // write the code to file
     writeFileSync(join(outPath, `${BASICS_FILENAME}.ts`), result, { encoding: 'utf-8' });
-    // writeFileSync(join(outPath, 'index.ts'), index, { encoding: 'utf-8' });
-    console.log('Done!');
+    this.log('Done!');
   }
 }
 
-const [, , sources, out] = process.argv;
-if (out !== undefined && lstatSync(sources).isDirectory()) {
-  mkdirSync(out, { recursive: true });
-  new InterfaceProcessor().start(sources, out).catch(console.error);
-} else {
-  console.log(`Usage: processor.ts <source> <output>
+function isCliEntry(): boolean {
+  const entry = process.argv[1];
+  if (!entry) {
+    return false;
+  }
+  try {
+    return import.meta.url === pathToFileURL(resolve(entry)).href;
+  } catch {
+    return false;
+  }
+}
+
+if (isCliEntry()) {
+  const [, , sources, out] = process.argv;
+  if (out !== undefined && lstatSync(sources).isDirectory()) {
+    mkdirSync(out, { recursive: true });
+    new InterfaceProcessor().start(sources, out).catch(console.error);
+  } else {
+    console.log(`Usage: processor.ts <source> <output>
   <source> - ONVIF specs source directory
   <output> - generated interfaces output directory
   Example: processor.ts "../specs/wsdl/ver20" "./onvif/interfaces"`);
-  process.exit(1);
+    process.exit(1);
+  }
 }

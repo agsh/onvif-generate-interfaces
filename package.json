@@ -13,7 +13,9 @@
     "watch": "tsc --build --watch",
     "typedoc": "typedoc src",
     "lint": "eslint .",
-    "run": "tsx src/processor.ts"
+    "run": "tsx src/processor.ts",
+    "test": "node --import tsx --test test/**/*.test.ts",
+    "test:update": "UPDATE_GOLDENS=1 npm test"
   },
   "contributors": [
     {

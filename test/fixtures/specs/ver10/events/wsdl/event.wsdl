@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Minimal event WSDL fixture.
+  Covers: suppressImports of Date for paths containing "event".
+-->
+<wsdl:definitions xmlns:wsdl="http://schemas.xmlsoap.org/wsdl/"
+                  xmlns:xs="http://www.w3.org/2001/XMLSchema"
+                  xmlns:tev="http://www.onvif.org/ver10/events/wsdl"
+                  targetNamespace="http://www.onvif.org/ver10/events/wsdl">
+  <wsdl:types>
+    <xs:schema targetNamespace="http://www.onvif.org/ver10/events/wsdl"
+               elementFormDefault="qualified">
+
+      <xs:complexType name="NotificationMessage">
+        <xs:sequence>
+          <xs:element name="UtcTime" type="xs:dateTime"/>
+          <xs:element name="Topic" type="xs:string" minOccurs="0"/>
+        </xs:sequence>
+      </xs:complexType>
+
+      <xs:element name="PullMessagesResponse">
+        <xs:complexType>
+          <xs:sequence>
+            <xs:element name="CurrentTime" type="xs:dateTime"/>
+            <xs:element name="TerminationTime" type="xs:dateTime"/>
+            <xs:element name="NotificationMessage" type="tev:NotificationMessage" minOccurs="0" maxOccurs="unbounded"/>
+          </xs:sequence>
+        </xs:complexType>
+      </xs:element>
+
+    </xs:schema>
+  </wsdl:types>
+</wsdl:definitions>

@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Minimal device WSDL fixture.
+  Covers: skipElements override for Capabilities → tds:DeviceServiceCapabilities alias.
+-->
+<wsdl:definitions xmlns:wsdl="http://schemas.xmlsoap.org/wsdl/"
+                  xmlns:xs="http://www.w3.org/2001/XMLSchema"
+                  xmlns:tds="http://www.onvif.org/ver10/device/wsdl"
+                  targetNamespace="http://www.onvif.org/ver10/device/wsdl">
+  <wsdl:types>
+    <xs:schema targetNamespace="http://www.onvif.org/ver10/device/wsdl"
+               elementFormDefault="qualified">
+
+      <xs:complexType name="DeviceServiceCapabilities">
+        <xs:sequence>
+          <xs:element name="Network" type="xs:boolean" minOccurs="0"/>
+        </xs:sequence>
+      </xs:complexType>
+
+      <!-- This element alias must NOT be emitted (onvifOverrides.skipElements) -->
+      <xs:element name="Capabilities" type="tds:DeviceServiceCapabilities"/>
+
+      <xs:element name="GetDeviceInformation">
+        <xs:complexType/>
+      </xs:element>
+
+      <xs:element name="GetDeviceInformationResponse">
+        <xs:complexType>
+          <xs:sequence>
+            <xs:element name="Manufacturer" type="xs:string"/>
+            <xs:element name="Model" type="xs:string"/>
+          </xs:sequence>
+        </xs:complexType>
+      </xs:element>
+
+    </xs:schema>
+  </wsdl:types>
+</wsdl:definitions>

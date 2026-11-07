@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Minimal ver20 WSDL fixture.
+  Covers: output name ptz.2, Capabilities element, empty complexType response,
+  ProfileToken optional override, inherits schema types via local declarations.
+-->
+<wsdl:definitions xmlns:wsdl="http://schemas.xmlsoap.org/wsdl/"
+                  xmlns:xs="http://www.w3.org/2001/XMLSchema"
+                  xmlns:tptz="http://www.onvif.org/ver20/ptz/wsdl"
+                  targetNamespace="http://www.onvif.org/ver20/ptz/wsdl">
+  <wsdl:types>
+    <xs:schema targetNamespace="http://www.onvif.org/ver20/ptz/wsdl"
+               xmlns:tt="http://www.onvif.org/ver10/schema"
+               elementFormDefault="qualified">
+
+      <xs:complexType name="Capabilities">
+        <xs:sequence>
+          <xs:element name="EFlip" type="xs:boolean" minOccurs="0"/>
+          <xs:element name="Reverse" type="xs:boolean" minOccurs="0"/>
+          <xs:any namespace="##any" processContents="lax" minOccurs="0"/>
+        </xs:sequence>
+      </xs:complexType>
+
+      <xs:element name="Capabilities" type="tptz:Capabilities"/>
+
+      <xs:element name="GetStatus">
+        <xs:complexType>
+          <xs:sequence>
+            <xs:element name="ProfileToken" type="tt:ReferenceToken"/>
+          </xs:sequence>
+        </xs:complexType>
+      </xs:element>
+
+      <xs:element name="GetStatusResponse">
+        <xs:complexType>
+          <xs:sequence>
+            <xs:element name="PTZStatus" type="xs:string"/>
+          </xs:sequence>
+        </xs:complexType>
+      </xs:element>
+
+      <!-- Empty response body (common ONVIF pattern) -->
+      <xs:element name="StopResponse">
+        <xs:complexType/>
+      </xs:element>
+
+    </xs:schema>
+  </wsdl:types>
+</wsdl:definitions>

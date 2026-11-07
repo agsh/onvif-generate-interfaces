@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Minimal schema fixture for snapshot tests.
+  Covers: enums, lists, restriction aliases, complexContent extension,
+  ProfileToken field, xs:any ##any, Object rename, PositiveInteger / Duration.
+-->
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+           xmlns:tt="http://www.onvif.org/ver10/schema"
+           targetNamespace="http://www.onvif.org/ver10/schema"
+           elementFormDefault="qualified" version="0.0.1">
+
+  <xs:simpleType name="ReferenceToken">
+    <xs:annotation>
+      <xs:documentation>Opaque reference token.</xs:documentation>
+    </xs:annotation>
+    <xs:restriction base="xs:string"/>
+  </xs:simpleType>
+
+  <xs:simpleType name="MoveStatus">
+    <xs:restriction base="xs:string">
+      <xs:enumeration value="IDLE"/>
+      <xs:enumeration value="MOVING"/>
+      <xs:enumeration value="UNKNOWN"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:simpleType name="ReferenceTokenList">
+    <xs:list itemType="tt:ReferenceToken"/>
+  </xs:simpleType>
+
+  <xs:simpleType name="Delay">
+    <xs:restriction base="xs:duration"/>
+  </xs:simpleType>
+
+  <xs:complexType name="DeviceEntity">
+    <xs:attribute name="token" type="tt:ReferenceToken" use="required"/>
+  </xs:complexType>
+
+  <xs:complexType name="Object">
+    <xs:annotation>
+      <xs:documentation>Analytics object (renamed to OnvifObject in TS).</xs:documentation>
+    </xs:annotation>
+    <xs:complexContent>
+      <xs:extension base="tt:DeviceEntity">
+        <xs:sequence>
+          <xs:element name="Appearance" type="xs:string" minOccurs="0"/>
+          <xs:any namespace="##any" processContents="lax" minOccurs="0"/>
+        </xs:sequence>
+      </xs:extension>
+    </xs:complexContent>
+  </xs:complexType>
+
+  <xs:complexType name="PTZStatus">
+    <xs:sequence>
+      <xs:element name="MoveStatus" type="tt:MoveStatus" minOccurs="0"/>
+      <xs:element name="UtcTime" type="xs:dateTime"/>
+      <xs:any namespace="##any" processContents="lax" minOccurs="0"/>
+    </xs:sequence>
+  </xs:complexType>
+
+  <xs:complexType name="GetStatus">
+    <xs:sequence>
+      <xs:element name="ProfileToken" type="tt:ReferenceToken"/>
+      <xs:element name="Count" type="xs:positiveInteger" minOccurs="0"/>
+    </xs:sequence>
+  </xs:complexType>
+
+</xs:schema>
