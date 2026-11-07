@@ -3,9 +3,19 @@ import { Parser } from 'xml2js';
 import ts, { TypeNode } from 'typescript';
 import { glob } from 'glob';
 import chalk from 'chalk';
-import { join, parse } from 'node:path';
+import { join } from 'node:path';
 import { mkdirSync } from 'node:fs';
 import { format } from 'prettier';
+import {
+  applySuppressImports,
+  emptyOverrides,
+  fieldUseOverride,
+  GeneratorOverrides,
+  onvifOverrides,
+  renameType,
+  resolveOutputFileName,
+  shouldSkipElement,
+} from './overrides';
 
 const BASICS_FILENAME = 'basics';
 
@@ -133,11 +143,9 @@ function dataTypes(xsdType?: string): string {
   }
 }
 
-function cleanName(name: string): string {
-  if (name === 'Object') {
-    return 'OnvifObject';
-  }
-  return name.replace(/[-.]/g, '');
+function cleanName(name: string, overrides: GeneratorOverrides = emptyOverrides): string {
+  const renamed = renameType(name, overrides);
+  return renamed.replace(/[-.]/g, '');
 }
 
 function camelCase(name: string): string {
@@ -243,6 +251,7 @@ interface ProcessorConstructor {
   filePath: string;
   nodes: ts.Node[];
   links: Links;
+  overrides?: GeneratorOverrides;
 }
 
 type Links = Map<string, IType>;
@@ -280,10 +289,17 @@ export abstract class Processor {
 
   public readonly usedTypes: Set<string> = new Set();
 
-  constructor({ filePath, links }: ProcessorConstructor) {
+  protected readonly overrides: GeneratorOverrides;
+
+  constructor({ filePath, links, overrides }: ProcessorConstructor) {
     this.filePath = filePath;
     this.links = links;
-    this.fileName = parse(this.filePath).name + (this.filePath.includes('ver2') ? '.2' : '');
+    this.overrides = overrides ?? emptyOverrides;
+    this.fileName = resolveOutputFileName(this.filePath, this.overrides);
+  }
+
+  protected clean(name: string): string {
+    return cleanName(name, this.overrides);
   }
 
   abstract process(): Promise<void>;
@@ -313,20 +329,17 @@ export abstract class Processor {
   suffix(links: Links) {
     const imports: Record<string, string[]> = {};
     const typesToImport = this.usedTypes.difference(this.declaredTypes);
-    // hack to have native js-Date type for events
-    if (this.filePath.includes('event')){
-      typesToImport.delete('Date');
-    }
-      for (const type of typesToImport) {
-        const fileName = links.get(type)?.name;
-        if (!fileName) {
-          console.warn(chalk.yellow(`Type ${type} not found in links`));
-        } else if (imports[fileName]) {
-          imports[fileName].push(type);
-        } else {
-          imports[fileName] = [type];
-        }
+    applySuppressImports(this.filePath, this.fileName, typesToImport, this.overrides);
+    for (const type of typesToImport) {
+      const fileName = links.get(type)?.name;
+      if (!fileName) {
+        console.warn(chalk.yellow(`Type ${type} not found in links`));
+      } else if (imports[fileName]) {
+        imports[fileName].push(type);
+      } else {
+        imports[fileName] = [type];
       }
+    }
     const importNodes = Object.entries(imports).map(([fileName, types]) =>
       ts.factory.createImportDeclaration(
         undefined,
@@ -407,7 +420,6 @@ export abstract class Processor {
       // (e.g. PositiveInteger). Service-local names like Capabilities are
       // intentionally repeated across WSDLs and must still be emitted here.
       if (owner === BASICS_FILENAME && this.fileName !== BASICS_FILENAME) {
-        console.log(chalk.magentaBright(`${name} for ${this.fileName} already exists in ${owner}`));
         return;
       }
       // First registration wins for import resolution; later files still export.
@@ -433,12 +445,11 @@ export abstract class Processor {
 
   /**
    * Index signatures for xs:any namespace="##any" extension points.
-   * - `[key: string]` covers open XML element bags
-   * - `[key: symbol]` allows the onvif runtime `xsany = Symbol('any')` bag
-   *   (see onvif `toOnvifXMLSchemaObject.ts`) without TS2538
+   * Key kinds come from overrides (`extensionIndexKeyTypes`).
    */
   createExtensionIndexSignatures(anyNode: IAttribute): ts.TypeElement[] {
     const unknownType = ts.factory.createKeywordTypeNode(ts.SyntaxKind.UnknownKeyword);
+    const keyKinds = this.overrides.extensionIndexKeyTypes ?? emptyOverrides.extensionIndexKeyTypes;
     const makeIndex = (keyType: ts.KeywordTypeNode) =>
       ts.factory.createIndexSignature(
         undefined,
@@ -454,16 +465,21 @@ export abstract class Processor {
         unknownType,
       );
 
-    const stringIndex = Processor.createAnnotationIfExists(
-      anyNode,
-      makeIndex(ts.factory.createKeywordTypeNode(ts.SyntaxKind.StringKeyword)),
-    ) as ts.TypeElement;
-    const symbolIndex = makeIndex(ts.factory.createKeywordTypeNode(ts.SyntaxKind.SymbolKeyword));
-    return [stringIndex, symbolIndex];
+    return keyKinds.map((kind, index) => {
+      const keyType =
+        kind === 'symbol'
+          ? ts.factory.createKeywordTypeNode(ts.SyntaxKind.SymbolKeyword)
+          : ts.factory.createKeywordTypeNode(ts.SyntaxKind.StringKeyword);
+      const signature = makeIndex(keyType);
+      // Attach xs:annotation only to the first signature
+      return (
+        index === 0 ? Processor.createAnnotationIfExists(anyNode, signature) : signature
+      ) as ts.TypeElement;
+    });
   }
 
   generateSimpleTypeInterface(simpleType: ISimpleType) {
-    const name = cleanName(simpleType.meta.name!);
+    const name = this.clean(simpleType.meta.name!);
 
     // TODO type?
 
@@ -488,7 +504,7 @@ export abstract class Processor {
           ),
         );
       } else {
-        const typeName = cleanName(dataTypes(simpleType['xs:restriction'][0].meta.base));
+        const typeName = this.clean(dataTypes(simpleType['xs:restriction'][0].meta.base));
         this.trackUsedType(typeName);
         this.addNode(
           name,
@@ -505,7 +521,7 @@ export abstract class Processor {
       }
     } else if (simpleType['xs:list']) {
       /** LISTS */
-      const itemTypeName = cleanName(dataTypes(simpleType['xs:list'][0].meta.itemType));
+      const itemTypeName = this.clean(dataTypes(simpleType['xs:list'][0].meta.itemType));
       this.trackUsedType(itemTypeName);
       this.addNode(
         name,
@@ -523,37 +539,32 @@ export abstract class Processor {
   }
 
   createProperty(attribute: IAttribute) {
-    const typeName = cleanName(dataTypes(attribute.meta.type));
+    const typeName = this.clean(dataTypes(attribute.meta.type));
     let type: TypeNode = ts.factory.createTypeReferenceNode(typeName);
     /** REFS FOR XMIME */
     if (!attribute.meta.name && attribute.meta.ref) {
-      // attribute.meta.name = attribute.meta.ref.slice(6);
       attribute.meta.name = attribute.meta.ref.split(':')[1];
     }
     /** ARRAYS */
     if (attribute.meta.maxOccurs === 'unbounded') {
       type = ts.factory.createArrayTypeNode(type);
     }
-    // hack for the profileToken (we use activeSource if it isn't provided)
-    if (attribute.meta?.name === 'ProfileToken') {
-      attribute.meta.use = 'optional';
-    }
+
+    const useOverride = fieldUseOverride(this.fileName, attribute.meta.name, this.overrides);
+    const effectiveUse = useOverride ?? attribute.meta.use;
+
     const property = ts.factory.createPropertySignature(
       undefined,
       camelCase(attribute.meta.name!),
-      // attribute.meta.use !== 'required' && attribute.meta.minOccurs !== '1'
-      //   ? ts.factory.createToken(ts.SyntaxKind.QuestionToken)
-      //   : undefined,
-      (attribute.meta.use === 'required' ||
+      (effectiveUse === 'required' ||
         attribute.meta.minOccurs === '1' ||
         (!attribute.meta.minOccurs && !attribute.meta.maxOccurs)) &&
-        attribute.meta.use !== 'optional'
+        effectiveUse !== 'optional'
         ? undefined
         : ts.factory.createToken(ts.SyntaxKind.QuestionToken),
       type,
     );
     this.trackUsedType(typeName);
-    // console.log(chalk.yellow(`> ${attribute.meta.name} ${cleanName(dataTypes(attribute.meta.type))}`));
     return Processor.createAnnotationIfExists(attribute, property);
   }
 
@@ -566,24 +577,17 @@ export abstract class Processor {
       this.generateComplexTypeInterface(element['xs:complexType'][0]);
     } else {
       if (element['xs:complexType'] && typeof element['xs:complexType'][0] === 'string') {
-        // hack for the empty complex types in WSDL
-        // ex. <xs:element name="ModifyAnalyticsModulesResponse">
-        // 				<xs:complexType/>
-        // 		 </xs:element>
+        // Empty complex types in WSDL, e.g.
+        // <xs:element name="ModifyAnalyticsModulesResponse"><xs:complexType/></xs:element>
         element.meta.type = '';
       }
       if (element.meta.type !== undefined) {
-        // crutch and bicycle for 'Capabilities' in deviceMgmt TODO remove this?
-        if (
-          this.fileName === 'devicemgmt' &&
-          element.meta.name === 'Capabilities' &&
-          element.meta.type === 'tds:DeviceServiceCapabilities'
-        ) {
-          return ts.factory.createIdentifier("// 'Capabilities' in deviceMgmt");
+        if (shouldSkipElement(this.fileName, element.meta.name, element.meta.type, this.overrides)) {
+          return;
         }
-        const name = cleanName(element.meta.name);
-        const extendsName = cleanName(element.meta.type);
-        const heritageName = cleanName(extendsName.slice(extendsName.indexOf(':') + 1));
+        const name = this.clean(element.meta.name);
+        const extendsName = this.clean(element.meta.type);
+        const heritageName = this.clean(extendsName.slice(extendsName.indexOf(':') + 1));
         if (name === heritageName) {
           // type inherits itself
           return;
@@ -599,14 +603,11 @@ export abstract class Processor {
         this.addNode(name, Processor.createAnnotationIfExists(element, node));
       }
     }
-    // TODO method descriptions?
-    // element.meta
-    // console.log(`> ${element.meta.name}`);
   }
 
   generateComplexTypeInterface(complexType: IComplexType) {
     const { name } = complexType.meta;
-    const interfaceSymbol = ts.factory.createIdentifier(cleanName(name!));
+    const interfaceSymbol = ts.factory.createIdentifier(this.clean(name!));
 
     let members: ts.Node[] = [];
     let heritage;
@@ -614,7 +615,7 @@ export abstract class Processor {
     /** Complex Content */
     if (Array.isArray(complexType['xs:complexContent'])) {
       const extendsName = complexType['xs:complexContent'][0]['xs:extension'][0].meta.base;
-      const heritageName = cleanName(extendsName.slice(extendsName.indexOf(':') + 1));
+      const heritageName = this.clean(extendsName.slice(extendsName.indexOf(':') + 1));
       if (name === heritageName) {
         // type inherits itself
         return;
@@ -652,7 +653,7 @@ export abstract class Processor {
           }),
         );
       }
-      // cover xs:any ##any extension points with string + symbol index signatures
+      // cover xs:any ##any extension points (key kinds from overrides)
       if (sequence['xs:any'] && sequence['xs:any'][0].meta.namespace === '##any') {
         members.push(...this.createExtensionIndexSignatures(sequence['xs:any'][0]));
       }
@@ -704,6 +705,8 @@ class InterfaceProcessor {
 
   private links: Links = new Map();
 
+  constructor(private readonly overrides: GeneratorOverrides = onvifOverrides) {}
+
   async start(sourcesPath: string, outPath: string) {
     const [builtInTypes, builtInLinks] = generateBuiltIns();
     this.nodes = builtInTypes;
@@ -712,14 +715,13 @@ class InterfaceProcessor {
     const processors = [];
 
     const xsds = await glob(join(sourcesPath, '/**/*.xsd'));
-    // const xsds = await glob(join(sourcesPath, '/**/onvif.xsd'));
-    // const xsds = [];
     for (const xsd of xsds) {
       console.log(chalk.greenBright(`processing ${xsd}`));
       const proc = new ProcessorXSD({
         filePath: xsd,
         nodes: this.nodes,
         links: this.links,
+        overrides: this.overrides,
       });
       processors.push(proc);
       const procNodes = await proc.prefix();
@@ -727,15 +729,13 @@ class InterfaceProcessor {
     }
 
     const wsdls = await glob(join(sourcesPath, '/**/*.wsdl'));
-    // const wsdls = ['../specs/wsdl/ver10/device/wsdl/devicemgmt.wsdl'];
-    //const wsdls = ['../specs/wsdl/ver20/media/wsdl/media.wsdl'];
-    // const wsdls = [];
     for (const wdsl of wsdls) {
       console.log(chalk.greenBright(`processing ${wdsl}`));
       const proc = new ProcessorWSDL({
         filePath: wdsl,
         nodes: this.nodes,
         links: this.links,
+        overrides: this.overrides,
       });
       processors.push(proc);
       const procNodes = await proc.prefix();
