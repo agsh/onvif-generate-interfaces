@@ -1,7 +1,6 @@
 import { join } from 'node:path';
 import chalk from 'chalk';
 import { glob } from 'glob';
-import ts from 'typescript';
 import { generateBuiltIns } from './map-types';
 import { GeneratorOverrides, onvifOverrides } from './overrides';
 import { Links } from './schema-types';
@@ -19,8 +18,6 @@ export interface InterfaceProcessorOptions {
  * Orchestrates XSD → WSDL processing, import linking, and writing `.ts` modules.
  */
 export class InterfaceProcessor {
-  private nodes: ts.Node[] = [];
-
   private links: Links = new Map();
 
   private readonly overrides: GeneratorOverrides;
@@ -40,7 +37,6 @@ export class InterfaceProcessor {
 
   async start(sourcesPath: string, outPath: string) {
     const [builtInTypes, builtInLinks] = generateBuiltIns();
-    this.nodes = builtInTypes;
     this.links = builtInLinks;
 
     const processors = [];
@@ -54,8 +50,7 @@ export class InterfaceProcessor {
         overrides: this.overrides,
       });
       processors.push(proc);
-      const procNodes = await proc.prefix();
-      this.nodes = this.nodes.concat(procNodes);
+      await proc.prefix();
     }
 
     const wsdls = await glob(join(sourcesPath, '/**/*.wsdl'));
@@ -67,8 +62,7 @@ export class InterfaceProcessor {
         overrides: this.overrides,
       });
       processors.push(proc);
-      const procNodes = await proc.prefix();
-      this.nodes = this.nodes.concat(procNodes);
+      await proc.prefix();
     }
 
     for (const proc of processors.reverse()) {
