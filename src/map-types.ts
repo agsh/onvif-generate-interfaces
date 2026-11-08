@@ -8,50 +8,48 @@ export const NATIVE_TYPES = new Set(['Date', 'Buffer', 'Promise', 'Array', 'Reco
 
 /**
  * Explicit XSD → TS mappings (builtins / known foreign types).
+ * Lexical string types (hex/base64/QName) map to `string` — that is what xml2js yields.
+ * Open / foreign types we do not generate stay `unknown`.
+ */
+const BUILTIN_TYPES: Readonly<Record<string, string>> = {
+  'xs:double': 'number',
+  'xs:float': 'number',
+  'xs:int': 'number',
+  'xs:integer': 'number',
+  'xs:short': 'number',
+  'xs:signedInt': 'number',
+  'xs:unsignedInt': 'number',
+  'xs:unsignedShort': 'number',
+  'xs:nonNegativeInteger': 'number',
+  // Native JS Date — must NOT pass through renameTypes (tt:Date → OnvifDate)
+  'xs:dateTime': 'Date',
+  'xs:token': 'string',
+  // xs:time must not map to tt:Time { hour, minute, second }
+  'xs:time': 'string',
+  'xs:hexBinary': 'string',
+  'xs:base64Binary': 'string',
+  'xs:QName': 'string',
+  'xs:anyURI': 'AnyURI',
+  'xs:duration': 'Duration',
+  'xs:positiveInteger': 'PositiveInteger',
+  'xs:anyType': 'unknown',
+  'xs:anySimpleType': 'unknown',
+  'wsnt:NotificationMessageHolderType': 'unknown',
+  'wsnt:TopicExpressionType': 'unknown',
+  'wsnt:QueryExpressionType': 'unknown',
+  'wsnt:AbsoluteOrRelativeTimeType': 'unknown',
+  'soapenv:Envelope': 'unknown',
+  'soapenv:Fault': 'unknown',
+  'wsa:EndpointReferenceType': 'unknown',
+  'mpqf:MpegQueryType': 'unknown',
+};
+
+/**
+ * Explicit XSD → TS mappings (builtins / known foreign types).
  * Returns `undefined` when the QName should be treated as a schema-local type name.
  */
 export function mapBuiltin(xsdType: string): string | undefined {
-  switch (xsdType) {
-    case 'xs:double':
-    case 'xs:float':
-    case 'xs:int':
-    case 'xs:integer':
-    case 'xs:short':
-    case 'xs:signedInt':
-    case 'xs:unsignedInt':
-    case 'xs:unsignedShort':
-    case 'xs:nonNegativeInteger':
-      return 'number';
-    case 'xs:dateTime':
-      // Native JS Date — must NOT pass through renameTypes (tt:Date → OnvifDate)
-      return 'Date';
-    case 'xs:token':
-    case 'xs:time':
-      // xs:time must not map to tt:Time { hour, minute, second }
-      return 'string';
-    case 'xs:anyURI':
-      return 'AnyURI';
-    case 'xs:duration':
-      return 'Duration';
-    case 'xs:positiveInteger':
-      return 'PositiveInteger';
-    case 'xs:anyType':
-    case 'xs:hexBinary':
-    case 'xs:base64Binary':
-    case 'xs:anySimpleType':
-    case 'xs:QName':
-    case 'wsnt:NotificationMessageHolderType':
-    case 'wsnt:TopicExpressionType':
-    case 'wsnt:QueryExpressionType':
-    case 'wsnt:AbsoluteOrRelativeTimeType':
-    case 'soapenv:Envelope':
-    case 'soapenv:Fault':
-    case 'wsa:EndpointReferenceType':
-    case 'mpqf:MpegQueryType':
-      return 'unknown';
-    default:
-      return undefined;
-  }
+  return BUILTIN_TYPES[xsdType];
 }
 
 export function dataTypes(xsdType?: string): string {

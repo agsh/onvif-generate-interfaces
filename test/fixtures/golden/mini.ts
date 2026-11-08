@@ -5,6 +5,8 @@ export type ReferenceToken = string;
 export type MoveStatus = 'IDLE' | 'MOVING' | 'UNKNOWN';
 export type ReferenceTokenList = ReferenceToken[];
 export type Delay = Duration;
+export type ExtendedDirection = 'Left' | 'Right' | 'Any';
+export type Direction = ExtendedDirection;
 export interface DeviceEntity {
   token: ReferenceToken;
 }
@@ -26,7 +28,7 @@ export interface GetStatus {
   tracked?: OnvifObject;
 }
 export interface SerialData {
-  binary?: unknown;
+  binary?: string;
   string?: string;
 }
 export interface MetadataStream {
@@ -38,6 +40,29 @@ export interface MetadataStream {
 export interface PresetDetail {
   presetToken?: ReferenceToken;
   home?: boolean;
+  [key: string]: unknown;
+  [key: symbol]: unknown;
+}
+export interface CertificateUsage {
+  _: string;
+  critical: boolean;
+}
+export interface UnorderedPair {
+  left: string;
+  right?: string;
+}
+export interface NamedPoint {
+  token: ReferenceToken;
+  name?: string;
+  x: number;
+  y: number;
+}
+export interface FrameExtension {
+  motionInCells?: boolean;
+  [key: string]: unknown;
+  [key: symbol]: unknown;
+}
+export interface FrameExtension2 {
   [key: string]: unknown;
   [key: symbol]: unknown;
 }

@@ -97,4 +97,64 @@
     </xs:sequence>
   </xs:complexType>
 
+  <!-- xs:union (cf. Direction → ExtendedDirection) -->
+  <xs:simpleType name="ExtendedDirection">
+    <xs:restriction base="xs:string">
+      <xs:enumeration value="Left"/>
+      <xs:enumeration value="Right"/>
+      <xs:enumeration value="Any"/>
+    </xs:restriction>
+  </xs:simpleType>
+  <xs:simpleType name="Direction">
+    <xs:union memberTypes="tt:ExtendedDirection"/>
+  </xs:simpleType>
+
+  <!-- xs:simpleContent: text node + attributes (cf. CertificateUsage) -->
+  <xs:complexType name="CertificateUsage">
+    <xs:simpleContent>
+      <xs:extension base="xs:string">
+        <xs:attribute name="Critical" type="xs:boolean" use="required"/>
+      </xs:extension>
+    </xs:simpleContent>
+  </xs:complexType>
+
+  <!-- xs:all — unordered elements -->
+  <xs:complexType name="UnorderedPair">
+    <xs:all>
+      <xs:element name="Left" type="xs:string"/>
+      <xs:element name="Right" type="xs:string" minOccurs="0"/>
+    </xs:all>
+  </xs:complexType>
+
+  <!-- Named group + attributeGroup, referenced from a complexType -->
+  <xs:attributeGroup name="TokenAttrs">
+    <xs:attribute name="token" type="tt:ReferenceToken" use="required"/>
+    <xs:attribute name="Name" type="xs:string"/>
+  </xs:attributeGroup>
+  <xs:group name="PointPair">
+    <xs:sequence>
+      <xs:element name="X" type="xs:float"/>
+      <xs:element name="Y" type="xs:float"/>
+    </xs:sequence>
+  </xs:group>
+  <xs:complexType name="NamedPoint">
+    <xs:sequence>
+      <xs:group ref="tt:PointPair"/>
+    </xs:sequence>
+    <xs:attributeGroup ref="tt:TokenAttrs"/>
+  </xs:complexType>
+
+  <!-- ##other / ##targetNamespace open content (cf. FrameExtension / FrameExtension2) -->
+  <xs:complexType name="FrameExtension">
+    <xs:sequence>
+      <xs:any namespace="##other" processContents="lax" minOccurs="0" maxOccurs="unbounded"/>
+      <xs:element name="MotionInCells" type="xs:boolean" minOccurs="0"/>
+    </xs:sequence>
+  </xs:complexType>
+  <xs:complexType name="FrameExtension2">
+    <xs:sequence>
+      <xs:any namespace="##targetNamespace" processContents="lax" minOccurs="0" maxOccurs="unbounded"/>
+    </xs:sequence>
+  </xs:complexType>
+
 </xs:schema>

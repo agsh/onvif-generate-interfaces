@@ -11,14 +11,20 @@ import {
   shouldSkipElement,
 } from './overrides';
 import {
+  IAll,
   IAnyParticle,
   IAttribute,
+  IAttributeGroup,
   IChoice,
   IComplexType,
   IElement,
+  IGroupRef,
+  IParticleContainer,
   ISchemaDefinition,
   ISequence,
+  ISimpleContent,
   ISimpleType,
+  isExtensionAnyNamespace,
   Links,
 } from './schema-types';
 import { formatComment, writeInterfaceFile } from './write';
@@ -50,6 +56,12 @@ export abstract class Processor {
 
   protected readonly overrides: GeneratorOverrides;
 
+  /** Top-level xs:group definitions in the current schema (local name → definition). */
+  private readonly groups = new Map<string, IGroupRef>();
+
+  /** Top-level xs:attributeGroup definitions in the current schema. */
+  private readonly attributeGroups = new Map<string, IAttributeGroup>();
+
   constructor({ filePath, links, overrides }: ProcessorConstructor) {
     this.filePath = filePath;
     this.links = links;
@@ -70,6 +82,7 @@ export abstract class Processor {
    */
   async prefix(): Promise<ts.Node[]> {
     await this.process();
+    this.collectNamedGroups();
     if (this.schema?.['xs:simpleType']) {
       this.schema['xs:simpleType'].forEach((simpleType) => this.generateSimpleTypeInterface(simpleType));
     }
@@ -80,6 +93,26 @@ export abstract class Processor {
       this.schema['xs:element'].forEach((element) => this.generateElementType(element));
     }
     return this.nodes;
+  }
+
+  /** Index top-level group / attributeGroup declarations for later ref expansion. */
+  private collectNamedGroups() {
+    this.groups.clear();
+    this.attributeGroups.clear();
+    for (const group of this.schema?.['xs:group'] ?? []) {
+      if (group.meta?.name) {
+        this.groups.set(group.meta.name, group);
+      }
+    }
+    for (const ag of this.schema?.['xs:attributeGroup'] ?? []) {
+      if (ag.meta?.name) {
+        this.attributeGroups.set(ag.meta.name, ag);
+      }
+    }
+  }
+
+  private localNameFromRef(ref: string): string {
+    return ref.includes(':') ? ref.slice(ref.indexOf(':') + 1) : ref;
   }
 
   /**
@@ -127,16 +160,8 @@ export abstract class Processor {
     if (attribute['xs:annotation']) {
       const annotation =
         typeof attribute['xs:annotation']?.[0] === 'string'
-          ? // For these annotations
-            // <xs:annotation>
-            //   All hardware types specified are related to network devices supporting ONVIF specification.
-            // </xs:annotation>
-            attribute['xs:annotation']?.[0]
-          : // For these annotations
-            // <xs:annotation>
-            // 	 <xs:documentation>Multiple sensors device.</xs:documentation>
-            // </xs:annotation>
-            attribute['xs:annotation']?.[0]['xs:documentation'][0];
+          ? attribute['xs:annotation']?.[0]
+          : attribute['xs:annotation']?.[0]['xs:documentation'][0];
       return ts.addSyntheticLeadingComment(node, ts.SyntaxKind.MultiLineCommentTrivia, formatComment(annotation), true);
     }
     return node;
@@ -146,12 +171,9 @@ export abstract class Processor {
     if (this.links.has(name)) {
       const owner = this.links.get(name)!.name;
       // Only suppress redeclaration for true builtins from basics
-      // (e.g. PositiveInteger). Service-local names like Capabilities are
-      // intentionally repeated across WSDLs and must still be emitted here.
       if (owner === BASICS_FILENAME && this.fileName !== BASICS_FILENAME) {
         return;
       }
-      // First registration wins for import resolution; later files still export.
     } else {
       this.links.set(name, {
         name: this.fileName,
@@ -165,7 +187,6 @@ export abstract class Processor {
     this.nodes.push(node);
   }
 
-  /** Record a referenced type so suffix() can emit the right import. */
   trackUsedType(typeName: string) {
     if (needsImport(typeName)) {
       this.usedTypes.add(typeName);
@@ -173,10 +194,10 @@ export abstract class Processor {
   }
 
   /**
-   * Index signatures for xs:any namespace="##any" extension points.
-   * Key kinds come from overrides (`extensionIndexKeyTypes`).
+   * Index signatures for xs:any / xs:anyAttribute extension points
+   * (`##any`, `##other`, `##targetNamespace`).
    */
-  createExtensionIndexSignatures(anyNode: IAttribute): ts.TypeElement[] {
+  createExtensionIndexSignatures(anyNode: IAttribute | IAnyParticle): ts.TypeElement[] {
     const unknownType = ts.factory.createKeywordTypeNode(ts.SyntaxKind.UnknownKeyword);
     const keyKinds = this.overrides.extensionIndexKeyTypes ?? emptyOverrides.extensionIndexKeyTypes;
     const makeIndex = (keyType: ts.KeywordTypeNode) =>
@@ -200,11 +221,15 @@ export abstract class Processor {
           ? ts.factory.createKeywordTypeNode(ts.SyntaxKind.SymbolKeyword)
           : ts.factory.createKeywordTypeNode(ts.SyntaxKind.StringKeyword);
       const signature = makeIndex(keyType);
-      // Attach xs:annotation only to the first signature
       return (
-        index === 0 ? Processor.createAnnotationIfExists(anyNode, signature) : signature
+        index === 0 ? Processor.createAnnotationIfExists(anyNode as IAttribute, signature) : signature
       ) as ts.TypeElement;
     });
+  }
+
+  /** True if members already contain an index signature (avoid duplicates from multiple xs:any). */
+  private hasIndexSignature(members: ts.Node[]): boolean {
+    return members.some((m) => ts.isIndexSignatureDeclaration(m as ts.TypeElement));
   }
 
   generateSimpleTypeInterface(simpleType: ISimpleType) {
@@ -212,7 +237,6 @@ export abstract class Processor {
 
     const interfaceSymbol = ts.factory.createIdentifier(name);
     if (simpleType['xs:restriction']) {
-      /** RESTRICTIONS */
       if (simpleType['xs:restriction'][0]['xs:enumeration']) {
         this.addNode(
           name,
@@ -247,7 +271,6 @@ export abstract class Processor {
         );
       }
     } else if (simpleType['xs:list']) {
-      /** LISTS */
       const itemTypeName = resolveTypeRef(simpleType['xs:list'][0].meta.itemType, this.overrides);
       this.trackUsedType(itemTypeName);
       this.addNode(
@@ -262,20 +285,62 @@ export abstract class Processor {
           ),
         ),
       );
+    } else if (simpleType['xs:union']) {
+      this.generateUnionType(name, simpleType);
     }
   }
 
-  /**
-   * Normalize ref/name on an element or attribute particle.
-   * `ref="wsnt:NotificationMessage"` → property name from the QName local part.
-   * Type is left unset for foreign refs (wsnt/xmime/…) → `unknown`; those schemas
-   * are not generated. Same-schema refs that carry an explicit `type=` are unchanged.
-   */
+  /** `<xs:union memberTypes="…">` → TypeScript union type alias. */
+  generateUnionType(name: string, simpleType: ISimpleType) {
+    const union = simpleType['xs:union']![0];
+    const parts: TypeNode[] = [];
+
+    if (union.meta?.memberTypes) {
+      for (const member of union.meta.memberTypes.trim().split(/\s+/).filter(Boolean)) {
+        const typeName = resolveTypeRef(member, this.overrides);
+        this.trackUsedType(typeName);
+        parts.push(ts.factory.createTypeReferenceNode(typeName));
+      }
+    }
+
+    // Nested anonymous simpleTypes inside the union
+    for (const nested of union['xs:simpleType'] ?? []) {
+      if (nested['xs:restriction']?.[0]?.['xs:enumeration']) {
+        for (const enumValue of nested['xs:restriction'][0]['xs:enumeration']) {
+          parts.push(ts.factory.createLiteralTypeNode(ts.factory.createStringLiteral(enumValue.meta.value, true)));
+        }
+      } else if (nested['xs:restriction']?.[0]?.meta.base) {
+        const typeName = resolveTypeRef(nested['xs:restriction'][0].meta.base, this.overrides);
+        this.trackUsedType(typeName);
+        parts.push(ts.factory.createTypeReferenceNode(typeName));
+      } else if (nested['xs:list']?.[0]?.meta.itemType) {
+        const itemTypeName = resolveTypeRef(nested['xs:list'][0].meta.itemType, this.overrides);
+        this.trackUsedType(itemTypeName);
+        parts.push(ts.factory.createArrayTypeNode(ts.factory.createTypeReferenceNode(itemTypeName)));
+      }
+    }
+
+    if (parts.length === 0) {
+      parts.push(ts.factory.createKeywordTypeNode(ts.SyntaxKind.UnknownKeyword));
+    }
+
+    this.addNode(
+      name,
+      Processor.createAnnotationIfExists(
+        simpleType,
+        ts.factory.createTypeAliasDeclaration(
+          exportModifier,
+          ts.factory.createIdentifier(name),
+          undefined,
+          parts.length === 1 ? parts[0] : ts.factory.createUnionTypeNode(parts),
+        ),
+      ),
+    );
+  }
+
   normalizeParticle(attribute: IAttribute): void {
     if (attribute.meta.ref && !attribute.meta.name) {
-      attribute.meta.name = attribute.meta.ref.includes(':')
-        ? attribute.meta.ref.slice(attribute.meta.ref.indexOf(':') + 1)
-        : attribute.meta.ref;
+      attribute.meta.name = this.localNameFromRef(attribute.meta.ref);
     }
   }
 
@@ -286,7 +351,6 @@ export abstract class Processor {
     this.normalizeParticle(attribute);
     const typeName = resolveTypeRef(attribute.meta.type, this.overrides);
     let type: TypeNode = ts.factory.createTypeReferenceNode(typeName);
-    /** ARRAYS */
     if (attribute.meta.maxOccurs === 'unbounded' || options.forceArray) {
       type = ts.factory.createArrayTypeNode(type);
     }
@@ -309,7 +373,17 @@ export abstract class Processor {
     return Processor.createAnnotationIfExists(attribute, property);
   }
 
-  /** Emit members for an xs:choice — all branches optional; unbounded choice → arrays. */
+  /** Simple-content character data property (`_` — xml2js / ONVIF SOAP convention). */
+  createSimpleContentValueProperty(baseTypeName: string): ts.TypeElement {
+    this.trackUsedType(baseTypeName);
+    return ts.factory.createPropertySignature(
+      undefined,
+      '_',
+      undefined,
+      ts.factory.createTypeReferenceNode(baseTypeName),
+    );
+  }
+
   appendChoiceMembers(choice: IChoice, members: ts.Node[]) {
     const unbounded = choice.meta?.maxOccurs === 'unbounded';
     if (Array.isArray(choice['xs:element'])) {
@@ -327,35 +401,154 @@ export abstract class Processor {
         );
       }
     }
-    if (choice['xs:any']?.[0]?.meta.namespace === '##any') {
-      members.push(...this.createExtensionIndexSignatures(choice['xs:any'][0]));
+    if (Array.isArray(choice['xs:group'])) {
+      for (const group of choice['xs:group']) {
+        this.appendGroupRef(group, members, { forceOptional: true, forceArray: unbounded });
+      }
     }
+    this.appendAnyMembers(choice['xs:any'], members);
   }
 
   appendAnyMembers(anyParticles: IAnyParticle[] | undefined, members: ts.Node[]) {
-    if (anyParticles?.[0]?.meta.namespace === '##any') {
-      members.push(...this.createExtensionIndexSignatures(anyParticles[0]));
+    if (this.hasIndexSignature(members)) {
+      return;
+    }
+    const first = anyParticles?.find((a) => isExtensionAnyNamespace(a.meta?.namespace));
+    if (first) {
+      members.push(...this.createExtensionIndexSignatures(first));
     }
   }
 
-  /** Walk sequence particles: elements, nested choices, xs:any. */
-  appendSequenceMembers(sequence: ISequence, members: ts.Node[]) {
-    if (Array.isArray(sequence['xs:element'])) {
-      for (const attribute of sequence['xs:element']) {
+  appendAttributeMembers(attributes: IAttribute[] | undefined, members: ts.Node[]) {
+    if (!attributes) {
+      return;
+    }
+    for (const attribute of attributes) {
+      if (attribute.meta.use !== 'required') {
+        attribute.meta.use = 'optional';
+      }
+      members.push(this.createProperty(attribute));
+    }
+  }
+
+  appendAttributeGroupRefs(groups: IAttributeGroup[] | undefined, members: ts.Node[]) {
+    if (!groups) {
+      return;
+    }
+    for (const group of groups) {
+      this.appendAttributeGroup(group, members);
+    }
+  }
+
+  appendAttributeGroup(group: IAttributeGroup, members: ts.Node[]) {
+    if (group.meta.ref) {
+      const local = this.localNameFromRef(group.meta.ref);
+      const resolved = this.attributeGroups.get(local);
+      if (!resolved) {
+        console.warn(chalk.yellow(`attributeGroup ${group.meta.ref} not found in ${this.fileName}`));
+        return;
+      }
+      this.appendAttributeGroup(resolved, members);
+      return;
+    }
+    this.appendAttributeMembers(group['xs:attribute'], members);
+    this.appendAttributeGroupRefs(group['xs:attributeGroup'], members);
+    this.appendAnyMembers(group['xs:anyAttribute'], members);
+  }
+
+  appendGroupRef(
+    group: IGroupRef,
+    members: ts.Node[],
+    options: { forceOptional?: boolean; forceArray?: boolean } = {},
+  ) {
+    let body: IGroupRef | undefined = group;
+    if (group.meta.ref) {
+      const local = this.localNameFromRef(group.meta.ref);
+      body = this.groups.get(local);
+      if (!body) {
+        console.warn(chalk.yellow(`group ${group.meta.ref} not found in ${this.fileName}`));
+        return;
+      }
+    }
+    if (body['xs:sequence']) {
+      this.appendParticleContainer(body['xs:sequence'][0], members, options);
+    }
+    if (body['xs:choice']) {
+      for (const choice of body['xs:choice']) {
+        this.appendChoiceMembers(choice, members);
+      }
+    }
+    if (body['xs:all']) {
+      this.appendParticleContainer(body['xs:all'][0], members, options);
+    }
+  }
+
+  /** Walk sequence / all particle containers. */
+  appendParticleContainer(
+    container: IParticleContainer,
+    members: ts.Node[],
+    options: { forceOptional?: boolean; forceArray?: boolean } = {},
+  ) {
+    if (Array.isArray(container['xs:element'])) {
+      for (const attribute of container['xs:element']) {
         if (attribute['xs:complexType']) {
           attribute['xs:complexType'][0].meta = { name: attribute.meta.name, use: 'optional' };
           this.generateComplexTypeInterface(attribute['xs:complexType'][0]);
           attribute.meta.type = attribute.meta.name;
         }
-        members.push(this.createProperty(attribute));
+        members.push(
+          this.createProperty(attribute, {
+            forceOptional: options.forceOptional,
+            forceArray: options.forceArray,
+          }),
+        );
       }
     }
-    if (Array.isArray(sequence['xs:choice'])) {
-      for (const choice of sequence['xs:choice']) {
+    if (Array.isArray(container['xs:choice'])) {
+      for (const choice of container['xs:choice']) {
         this.appendChoiceMembers(choice, members);
       }
     }
-    this.appendAnyMembers(sequence['xs:any'], members);
+    if (Array.isArray(container['xs:sequence'])) {
+      for (const seq of container['xs:sequence']) {
+        this.appendParticleContainer(seq, members, options);
+      }
+    }
+    if (Array.isArray(container['xs:all'])) {
+      for (const all of container['xs:all']) {
+        this.appendParticleContainer(all, members, options);
+      }
+    }
+    if (Array.isArray(container['xs:group'])) {
+      for (const group of container['xs:group']) {
+        this.appendGroupRef(group, members, options);
+      }
+    }
+    this.appendAnyMembers(container['xs:any'], members);
+  }
+
+  appendSequenceMembers(sequence: ISequence, members: ts.Node[]) {
+    this.appendParticleContainer(sequence, members);
+  }
+
+  appendAllMembers(all: IAll, members: ts.Node[]) {
+    // xs:all is unordered; TypeScript cannot express order — same as sequence
+    this.appendParticleContainer(all, members);
+  }
+
+  /** Emit simpleContent: `_` value + attributes (+ open content from anyAttribute). */
+  appendSimpleContent(simpleContent: ISimpleContent, members: ts.Node[]) {
+    const extension = simpleContent['xs:extension']?.[0];
+    const restriction = simpleContent['xs:restriction']?.[0];
+    const body = extension ?? restriction;
+    if (!body) {
+      return;
+    }
+    const baseType = resolveTypeRef(body.meta.base, this.overrides);
+    members.push(this.createSimpleContentValueProperty(baseType));
+    this.appendAttributeMembers(body['xs:attribute'], members);
+    this.appendAttributeGroupRefs(body['xs:attributeGroup'], members);
+    this.appendAnyMembers(body['xs:anyAttribute'], members);
   }
 
   generateElementType(element: IElement) {
@@ -367,8 +560,6 @@ export abstract class Processor {
       this.generateComplexTypeInterface(element['xs:complexType'][0]);
     } else {
       if (element['xs:complexType'] && typeof element['xs:complexType'][0] === 'string') {
-        // Empty complex types in WSDL, e.g.
-        // <xs:element name="ModifyAnalyticsModulesResponse"><xs:complexType/></xs:element>
         element.meta.type = '';
       }
       if (element.meta.type !== undefined) {
@@ -376,7 +567,6 @@ export abstract class Processor {
           return;
         }
         const name = this.clean(element.meta.name);
-        // Empty <xs:complexType/> → empty interface, no heritage
         if (element.meta.type === '') {
           this.addNode(
             name,
@@ -395,7 +585,6 @@ export abstract class Processor {
         }
         const heritageName = resolveTypeRef(element.meta.type, this.overrides);
         if (name === heritageName) {
-          // type inherits itself
           return;
         }
         const heritage = this.extendInterface(heritageName);
@@ -424,34 +613,37 @@ export abstract class Processor {
       const extendsName = complexType['xs:complexContent'][0]['xs:extension'][0].meta.base;
       const heritageName = resolveTypeRef(extendsName, this.overrides);
       if (name === heritageName) {
-        // type inherits itself
         return;
       }
       heritage = this.extendInterface(heritageName);
-      if (complexType['xs:sequence'] || complexType['xs:choice']) {
-        throw new Error(`complexType has sequence/choice alongside complexContent: ${name}`);
+      if (complexType['xs:sequence'] || complexType['xs:choice'] || complexType['xs:all'] || complexType['xs:group']) {
+        throw new Error(`complexType has particles alongside complexContent: ${name}`);
       }
       const extension = complexType['xs:complexContent'][0]['xs:extension'][0];
       complexType['xs:sequence'] = extension['xs:sequence'];
       complexType['xs:choice'] = extension['xs:choice'];
+      complexType['xs:all'] = extension['xs:all'];
+      complexType['xs:group'] = extension['xs:group'];
       if (extension['xs:attribute']) {
         complexType['xs:attribute'] = extension['xs:attribute'];
       }
+      if (extension['xs:attributeGroup']) {
+        complexType['xs:attributeGroup'] = extension['xs:attributeGroup'];
+      }
+      if (extension['xs:anyAttribute']) {
+        complexType['xs:anyAttribute'] = extension['xs:anyAttribute'];
+      }
     }
 
-    if (complexType['xs:attribute']) {
-      members = members.concat(
-        complexType['xs:attribute'].map((attribute) => {
-          if (attribute.meta.use !== 'required') {
-            // by default attributes are optional
-            attribute.meta.use = 'optional';
-          }
-          return this.createProperty(attribute);
-        }),
-      );
+    /** Simple Content (character data + attributes) */
+    if (Array.isArray(complexType['xs:simpleContent'])) {
+      this.appendSimpleContent(complexType['xs:simpleContent'][0], members);
     }
 
-    // Top-level choice (SerialData, VideoAnalyticsStream, …)
+    this.appendAttributeMembers(complexType['xs:attribute'], members);
+    this.appendAttributeGroupRefs(complexType['xs:attributeGroup'], members);
+    this.appendAnyMembers(complexType['xs:anyAttribute'], members);
+
     if (Array.isArray(complexType['xs:choice'])) {
       for (const choice of complexType['xs:choice']) {
         this.appendChoiceMembers(choice, members);
@@ -460,6 +652,16 @@ export abstract class Processor {
 
     if (complexType['xs:sequence']) {
       this.appendSequenceMembers(complexType['xs:sequence'][0], members);
+    }
+
+    if (complexType['xs:all']) {
+      this.appendAllMembers(complexType['xs:all'][0], members);
+    }
+
+    if (Array.isArray(complexType['xs:group'])) {
+      for (const group of complexType['xs:group']) {
+        this.appendGroupRef(group, members);
+      }
     }
 
     const node = ts.factory.createInterfaceDeclaration(

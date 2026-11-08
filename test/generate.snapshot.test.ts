@@ -10,7 +10,8 @@
  *
  * What the fixtures exercise (see comments inside each .xsd/.wsdl):
  *  - mini.xsd      — enums, lists, extension, xs:any, ProfileToken, Object→OnvifObject,
- *                    xs:choice (top-level + in sequence + unbounded), tt:Object QName
+ *                    xs:choice / xs:all / xs:union / xs:simpleContent / group+attributeGroup,
+ *                    ##other / ##targetNamespace
  *  - ptz.wsdl      — ver20 → ptz.2.ts naming, Capabilities, empty complexType
  *  - devicemgmt    — skipElements for Capabilities alias
  *  - event.wsdl    — suppressImports keeps native Date (no Date import)
@@ -127,7 +128,7 @@ describe('generator golden snapshots', () => {
     const mini = readFileSync(join(outDir, 'mini.ts'), 'utf8');
 
     // Top-level choice → exclusive optional fields
-    assert.match(mini, /export interface SerialData \{[^}]*binary\?: unknown;[^}]*string\?: string;/s);
+    assert.match(mini, /export interface SerialData \{[^}]*binary\?: string;[^}]*string\?: string;/s);
 
     // Unbounded choice in sequence → array fields + index signatures from xs:any
     // "PTZ" keeps leading capitals (second char is uppercase) → property name PTZ
@@ -135,5 +136,16 @@ describe('generator golden snapshots', () => {
 
     // Exclusive choice + sibling xs:any
     assert.match(mini, /export interface PresetDetail \{[^}]*presetToken\?: ReferenceToken;[^}]*home\?: boolean;/s);
+  });
+
+  it('maps union, simpleContent, all, group/attributeGroup, ##other/##targetNamespace', () => {
+    const mini = readFileSync(join(outDir, 'mini.ts'), 'utf8');
+
+    assert.match(mini, /export type Direction = ExtendedDirection/);
+    assert.match(mini, /export interface CertificateUsage \{[^}]*_: string;[^}]*critical: boolean;/s);
+    assert.match(mini, /export interface UnorderedPair \{[^}]*left: string;[^}]*right\?: string;/s);
+    assert.match(mini, /export interface NamedPoint \{[^}]*token: ReferenceToken;[^}]*x: number;[^}]*y: number;/s);
+    assert.match(mini, /export interface FrameExtension \{[^}]*motionInCells\?: boolean;[^}]*\[key: string\]: unknown;/s);
+    assert.match(mini, /export interface FrameExtension2 \{[^}]*\[key: string\]: unknown;/s);
   });
 });
