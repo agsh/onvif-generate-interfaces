@@ -21,7 +21,7 @@ import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, it, before, after } from 'node:test';
-import { InterfaceProcessor } from '../src/processor';
+import { InterfaceProcessor } from '../src/generate';
 import { onvifOverrides } from '../src/overrides';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));

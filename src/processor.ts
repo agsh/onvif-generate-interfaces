@@ -1,306 +1,37 @@
-import { lstatSync, readFileSync, writeFileSync } from 'fs';
-import { Parser } from 'xml2js';
-import ts, { TypeNode } from 'typescript';
-import { glob } from 'glob';
 import chalk from 'chalk';
-import { join, resolve } from 'node:path';
-import { mkdirSync } from 'node:fs';
-import { pathToFileURL } from 'node:url';
-import { format } from 'prettier';
+import ts, { TypeNode } from 'typescript';
+import { BASICS_FILENAME, exportModifier } from './constants';
+import { camelCase, cleanName, needsImport, resolveTypeRef } from './map-types';
 import {
   applySuppressImports,
   emptyOverrides,
   fieldUseOverride,
   GeneratorOverrides,
-  onvifOverrides,
-  renameType,
   resolveOutputFileName,
   shouldSkipElement,
 } from './overrides';
+import {
+  IAnyParticle,
+  IAttribute,
+  IChoice,
+  IComplexType,
+  IElement,
+  ISchemaDefinition,
+  ISequence,
+  ISimpleType,
+  Links,
+} from './schema-types';
+import { formatComment, writeInterfaceFile } from './write';
+import { parseXmlFile } from './xml';
 
-const BASICS_FILENAME = 'basics';
-
-const sourceFile = ts.createSourceFile(
-  'source.ts', // the output file name
-  '', // the text of the source code, not needed for our purposes
-  ts.ScriptTarget.Latest, // the target language version for the output file
-  false,
-  ts.ScriptKind.TS, // output script kind. options include JS, TS, JSX, TSX and others
-);
-
-// used for adding `export` directive to generated type
-const exportModifier = ts.factory.createModifiersFromModifierFlags(ts.ModifierFlags.Export);
-
-/** Native TS / utility names that must not be imported from generated modules. */
-const NATIVE_TYPES = new Set(['Date', 'Buffer', 'Promise', 'Array', 'Record', 'Map', 'Set']);
-
-const generateBuiltIns = (): [ts.Node[], Links] => {
-  // Aliases for XSD builtins that are referenced by name from dataTypes().
-  // PositiveInteger lives here (not only in types.xsd) so files that map
-  // xs:positiveInteger → PositiveInteger always resolve an import target.
-  // NOTE: do NOT add Time — tt:Time is a real complex type (hour/minute/second).
-  const types = {
-    AnyURI: 'string',
-    FilterType: 'any',
-    NCName: 'string',
-    Duration: 'string',
-    PositiveInteger: 'number',
-  };
-  const builtInTypeNodes: ts.Node[] = [
-    ...Object.entries(types).map(([name, typeName]) =>
-      ts.factory.createTypeAliasDeclaration(
-        exportModifier,
-        name,
-        undefined,
-        ts.factory.createTypeReferenceNode(typeName),
-      ),
-    ),
-  ];
-  const builtInLinks: Links = new Map(Object.entries(types).map(([name]) => [name, { name: BASICS_FILENAME }]));
-  return [builtInTypeNodes, builtInLinks];
-};
-
-/** True when a type name should be tracked for cross-file imports. */
-function needsImport(typeName: string): boolean {
-  if (!typeName || NATIVE_TYPES.has(typeName)) {
-    return false;
-  }
-  // primitives / keywords from dataTypes()
-  if (typeName === typeName.toLowerCase()) {
-    return false;
-  }
-  return true;
-}
-
-/**
- * Explicit XSD → TS mappings (builtins / known foreign types).
- * Returns `undefined` when the QName should be treated as a schema-local type name.
- */
-function mapBuiltin(xsdType: string): string | undefined {
-  switch (xsdType) {
-    case 'xs:double':
-    case 'xs:float':
-    case 'xs:int':
-    case 'xs:integer':
-    case 'xs:short':
-    case 'xs:signedInt':
-    case 'xs:unsignedInt':
-    case 'xs:unsignedShort':
-    case 'xs:nonNegativeInteger':
-      return 'number';
-    case 'xs:dateTime':
-      // Native JS Date — must NOT pass through renameTypes (tt:Date → OnvifDate)
-      return 'Date';
-    case 'xs:token':
-    case 'xs:time':
-      // xs:time must not map to tt:Time { hour, minute, second }
-      return 'string';
-    case 'xs:anyURI':
-      return 'AnyURI';
-    case 'xs:duration':
-      return 'Duration';
-    case 'xs:positiveInteger':
-      return 'PositiveInteger';
-    case 'xs:anyType':
-    case 'xs:hexBinary':
-    case 'xs:base64Binary':
-    case 'xs:anySimpleType':
-    case 'xs:QName':
-    case 'wsnt:NotificationMessageHolderType':
-    case 'wsnt:TopicExpressionType':
-    case 'wsnt:QueryExpressionType':
-    case 'wsnt:AbsoluteOrRelativeTimeType':
-    case 'soapenv:Envelope':
-    case 'soapenv:Fault':
-    case 'wsa:EndpointReferenceType':
-    case 'mpqf:MpegQueryType':
-      return 'unknown';
-    default:
-      return undefined;
-  }
-}
-
-function dataTypes(xsdType?: string): string {
-  if (!xsdType) {
-    return 'unknown';
-  }
-  const builtin = mapBuiltin(xsdType);
-  if (builtin !== undefined) {
-    return builtin;
-  }
-  // Namespace-aware: strip only the prefix (`tt:Foo` → `Foo`)
-  return xsdType.includes(':') ? xsdType.slice(xsdType.indexOf(':') + 1) : xsdType;
-}
-
-function cleanName(name: string, overrides: GeneratorOverrides = emptyOverrides): string {
-  const renamed = renameType(name, overrides);
-  return renamed.replace(/[-.]/g, '');
-}
-
-/**
- * Resolve an XSD QName / builtin to the TypeScript type name used in generated code.
- * Builtin mappings (xs:dateTime → Date, …) are returned as-is.
- * Schema-local names get renameTypes (Object → OnvifObject, Date → OnvifDate).
- */
-function resolveTypeRef(xsdType: string | undefined, overrides: GeneratorOverrides): string {
-  if (!xsdType) {
-    return 'unknown';
-  }
-  const builtin = mapBuiltin(xsdType);
-  if (builtin !== undefined) {
-    return builtin;
-  }
-  const local = xsdType.includes(':') ? xsdType.slice(xsdType.indexOf(':') + 1) : xsdType;
-  return cleanName(local, overrides);
-}
-
-function camelCase(name: string): string {
-  if (name.length === 1) {
-    return name.toLowerCase();
-  }
-  const secondLetter = name.charAt(1);
-  if (secondLetter && secondLetter.toUpperCase() !== secondLetter) {
-    name = name.charAt(0).toLowerCase() + name.slice(1);
-  }
-  if (/[-.]/g.test(name)) {
-    name = `'${name}'`;
-  }
-  return name;
-}
-interface IAttribute {
-  meta: {
-    type?: string;
-    name?: string;
-    ref?: string;
-    maxOccurs?: string;
-    minOccurs?: string;
-    use?: 'required' | 'optional';
-    namespace?: string;
-    processContents?: string;
-  };
-  'xs:annotation'?: {
-    'xs:documentation': string[];
-  }[];
-}
-
-interface ISimpleType extends IAttribute {
-  'xs:restriction': {
-    meta: {
-      base: string;
-    };
-    'xs:enumeration'?: {
-      meta: {
-        value: string;
-      };
-    }[];
-  }[];
-  'xs:list': {
-    meta: {
-      itemType: string;
-    };
-  }[];
-}
-
-/** Element particle as produced by xml2js (sequence / choice children). */
-interface IElementParticle extends IAttribute {
-  meta: IAttribute['meta'] & {
-    name?: string;
-    type?: string;
-    use?: 'required' | 'optional';
-  };
-  'xs:complexType'?: IComplexType[];
-  'xs:annotation'?: {
-    'xs:documentation': string[];
-  }[];
-}
-
-interface IAnyParticle {
-  meta: {
-    namespace: string;
-    processContents: string;
-    minOccurs?: string;
-    maxOccurs?: string;
-  };
-  'xs:annotation'?: {
-    'xs:documentation': string[];
-  }[];
-}
-
-interface IChoice {
-  meta?: {
-    minOccurs?: string;
-    maxOccurs?: string;
-  };
-  'xs:element'?: IElementParticle[];
-  'xs:any'?: IAnyParticle[];
-}
-
-interface ISequence {
-  'xs:element'?: IElementParticle[];
-  'xs:choice'?: IChoice[];
-  'xs:any'?: IAnyParticle[];
-}
-
-interface IComplexType extends IAttribute {
-  'xs:complexContent': {
-    'xs:extension': {
-      meta: {
-        base: string;
-      };
-      'xs:sequence'?: ISequence[];
-      'xs:choice'?: IChoice[];
-      'xs:attribute'?: IAttribute[];
-    }[];
-  }[];
-  'xs:attribute'?: IAttribute[];
-  'xs:sequence'?: ISequence[];
-  /** Top-level choice (e.g. VideoAnalyticsStream, SerialData) */
-  'xs:choice'?: IChoice[];
-}
-
-interface IElement {
-  meta: {
-    name: string;
-    type?: string;
-    use: 'required' | 'optional';
-  };
-  'xs:complexType': IComplexType[];
-}
-
-interface ISchemaDefinition {
-  'xs:schema': never;
-  'wsdl:definitions': { 'wsdl:types': { 'xs:schema': never }[] };
-  'xs:simpleType': ISimpleType[];
-  'xs:complexType': IComplexType[];
-  'xs:element': IElement[];
-}
-
-interface ProcessorConstructor {
+export interface ProcessorConstructor {
   filePath: string;
-  nodes: ts.Node[];
   links: Links;
   overrides?: GeneratorOverrides;
 }
 
-type Links = Map<string, IType>;
-
-function formatComment(str: string) {
-  const strs = str
-    .split('\n')
-    .filter((a) => a.trim() !== '')
-    .map((a) => a.trim().replace(/<[^>]*>/g, ''));
-  if (strs.length === 0) {
-    return '';
-  }
-  if (strs.length === 1) {
-    return `* ${strs[0]} `;
-  }
-  const [first, ...others] = strs;
-  return `*\n * ${first}\n${others.map((a) => ` * ${a}`).join('\n')}\n `;
-}
-
 /**
- * Common class to process xml-files
+ * Common class to process xml-files into TypeScript AST nodes.
  */
 export abstract class Processor {
   public readonly filePath: string;
@@ -384,44 +115,12 @@ export abstract class Processor {
     this.nodes.unshift(...importNodes, ts.factory.createIdentifier('\n'));
   }
 
-  /**
-   * Generate interface file at given path
-   */
   async writeInterface(path: string, options: { silent?: boolean } = {}) {
-    const nodeArr = ts.factory.createNodeArray(this.nodes);
-
-    // printer for writing the AST to a file as code
-    const printer = ts.createPrinter({ newLine: ts.NewLineKind.LineFeed });
-    const result = printer.printList(ts.ListFormat.MultiLine, nodeArr, sourceFile);
-
-    const prettifiedResult = await format(result, {
-      parser: 'typescript',
-      singleQuote: true,
-      semi: true,
-      trailingComma: 'all',
-      arrowParens: 'always',
-      endOfLine: 'lf',
-      printWidth: 120,
-    });
-
-    // write the code to file
-    if (!options.silent) {
-      console.log(chalk.greenBright(`Save to ${join(path, `${this.fileName}.ts`)}`));
-    }
-    writeFileSync(join(path, `${this.fileName}.ts`), prettifiedResult, { encoding: 'utf-8' });
+    await writeInterfaceFile(path, this.fileName, this.nodes, options);
   }
 
   async processXML() {
-    const xsdData = readFileSync(this.filePath, { encoding: 'utf-8' }).replace(
-      /<xs:documentation>([\s\S]*?)<\/xs:documentation>/g,
-      (_, b: string) => `<xs:documentation><![CDATA[${b.replace(/(\s)+\n/, '\n')}]]></xs:documentation>`,
-    );
-
-    const xmlParser = new Parser({
-      attrkey: 'meta',
-    });
-
-    return xmlParser.parseStringPromise(xsdData) as Promise<ISchemaDefinition>;
+    return parseXmlFile(this.filePath);
   }
 
   static createAnnotationIfExists(attribute: IAttribute, node: ts.Node) {
@@ -511,8 +210,6 @@ export abstract class Processor {
   generateSimpleTypeInterface(simpleType: ISimpleType) {
     const name = this.clean(simpleType.meta.name!);
 
-    // TODO type?
-
     const interfaceSymbol = ts.factory.createIdentifier(name);
     if (simpleType['xs:restriction']) {
       /** RESTRICTIONS */
@@ -523,7 +220,7 @@ export abstract class Processor {
             simpleType,
             ts.factory.createTypeAliasDeclaration(
               exportModifier,
-              interfaceSymbol, // interface name
+              interfaceSymbol,
               undefined,
               ts.factory.createUnionTypeNode(
                 simpleType['xs:restriction'][0]['xs:enumeration'].map((enumValue) =>
@@ -620,7 +317,6 @@ export abstract class Processor {
         if (element['xs:complexType']) {
           element['xs:complexType'][0].meta = { name: element.meta.name, use: 'optional' };
           this.generateComplexTypeInterface(element['xs:complexType'][0]);
-          // Local nested type — no namespace prefix; resolveTypeRef keeps the local name
           element.meta.type = element.meta.name;
         }
         members.push(
@@ -704,9 +400,9 @@ export abstract class Processor {
         }
         const heritage = this.extendInterface(heritageName);
         const node = ts.factory.createInterfaceDeclaration(
-          exportModifier, // modifiers
-          ts.factory.createIdentifier(name), // interface name
-          undefined, // no generic type parameters
+          exportModifier,
+          ts.factory.createIdentifier(name),
+          undefined,
           heritage,
           [],
         );
@@ -744,12 +440,15 @@ export abstract class Processor {
     }
 
     if (complexType['xs:attribute']) {
-      members = members.concat(complexType['xs:attribute'].map((attribute) => {
-        if (attribute.meta.use !== 'required') { // by default attributes are optional
-          attribute.meta.use = 'optional';
-        }
-        return this.createProperty(attribute);
-      }));
+      members = members.concat(
+        complexType['xs:attribute'].map((attribute) => {
+          if (attribute.meta.use !== 'required') {
+            // by default attributes are optional
+            attribute.meta.use = 'optional';
+          }
+          return this.createProperty(attribute);
+        }),
+      );
     }
 
     // Top-level choice (SerialData, VideoAnalyticsStream, …)
@@ -764,9 +463,9 @@ export abstract class Processor {
     }
 
     const node = ts.factory.createInterfaceDeclaration(
-      exportModifier, // modifiers
-      interfaceSymbol, // interface name
-      undefined, // no generic type parameters
+      exportModifier,
+      interfaceSymbol,
+      undefined,
       heritage,
       members as ts.TypeElement[],
     );
@@ -783,124 +482,5 @@ export abstract class Processor {
       ];
     }
     return undefined;
-  }
-}
-
-class ProcessorXSD extends Processor {
-  async process() {
-    this.schema = (await this.processXML())['xs:schema'] as ISchemaDefinition;
-  }
-}
-
-class ProcessorWSDL extends Processor {
-  async process() {
-    const xml = await this.processXML();
-    const schemaDefinition = xml['wsdl:definitions']['wsdl:types']?.[0]['xs:schema']?.[0];
-    this.schema = schemaDefinition as ISchemaDefinition;
-  }
-}
-
-interface IType {
-  name?: string;
-}
-
-export interface InterfaceProcessorOptions {
-  overrides?: GeneratorOverrides;
-  /** Suppress progress logs (used by snapshot tests). */
-  silent?: boolean;
-}
-
-export class InterfaceProcessor {
-  private nodes: ts.Node[] = [];
-
-  private links: Links = new Map();
-
-  private readonly overrides: GeneratorOverrides;
-
-  private readonly silent: boolean;
-
-  constructor(options: InterfaceProcessorOptions = {}) {
-    this.overrides = options.overrides ?? onvifOverrides;
-    this.silent = options.silent ?? false;
-  }
-
-  private log(message: string) {
-    if (!this.silent) {
-      console.log(message);
-    }
-  }
-
-  async start(sourcesPath: string, outPath: string) {
-    const [builtInTypes, builtInLinks] = generateBuiltIns();
-    this.nodes = builtInTypes;
-    this.links = builtInLinks;
-
-    const processors = [];
-
-    const xsds = await glob(join(sourcesPath, '/**/*.xsd'));
-    for (const xsd of xsds) {
-      this.log(chalk.greenBright(`processing ${xsd}`));
-      const proc = new ProcessorXSD({
-        filePath: xsd,
-        nodes: this.nodes,
-        links: this.links,
-        overrides: this.overrides,
-      });
-      processors.push(proc);
-      const procNodes = await proc.prefix();
-      this.nodes = this.nodes.concat(procNodes);
-    }
-
-    const wsdls = await glob(join(sourcesPath, '/**/*.wsdl'));
-    for (const wdsl of wsdls) {
-      this.log(chalk.greenBright(`processing ${wdsl}`));
-      const proc = new ProcessorWSDL({
-        filePath: wdsl,
-        nodes: this.nodes,
-        links: this.links,
-        overrides: this.overrides,
-      });
-      processors.push(proc);
-      const procNodes = await proc.prefix();
-      this.nodes = this.nodes.concat(procNodes);
-    }
-
-    for (const proc of processors.reverse()) {
-      proc.suffix(this.links);
-      await proc.writeInterface(outPath, { silent: this.silent });
-    }
-
-    const nodeArr = ts.factory.createNodeArray(builtInTypes);
-    const printer = ts.createPrinter({ newLine: ts.NewLineKind.LineFeed });
-    const result = printer.printList(ts.ListFormat.MultiLine, nodeArr, sourceFile);
-
-    writeFileSync(join(outPath, `${BASICS_FILENAME}.ts`), result, { encoding: 'utf-8' });
-    this.log('Done!');
-  }
-}
-
-function isCliEntry(): boolean {
-  const entry = process.argv[1];
-  if (!entry) {
-    return false;
-  }
-  try {
-    return import.meta.url === pathToFileURL(resolve(entry)).href;
-  } catch {
-    return false;
-  }
-}
-
-if (isCliEntry()) {
-  const [, , sources, out] = process.argv;
-  if (out !== undefined && lstatSync(sources).isDirectory()) {
-    mkdirSync(out, { recursive: true });
-    new InterfaceProcessor().start(sources, out).catch(console.error);
-  } else {
-    console.log(`Usage: processor.ts <source> <output>
-  <source> - ONVIF specs source directory
-  <output> - generated interfaces output directory
-  Example: processor.ts "../specs/wsdl/ver20" "./onvif/interfaces"`);
-    process.exit(1);
   }
 }
