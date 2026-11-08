@@ -18,17 +18,41 @@ export interface IAttribute {
   }[];
 }
 
-export interface ISimpleType extends IAttribute {
-  'xs:restriction': {
+/** Single XSD facet node (`<xs:maxLength value="64"/>`, etc.). */
+export interface IFacet {
+  meta: {
+    value: string;
+  };
+}
+
+/** Facets we surface as `@xsd …` JSDoc on generated aliases. */
+export type RestrictionFacets = {
+  'xs:length'?: IFacet[];
+  'xs:minLength'?: IFacet[];
+  'xs:maxLength'?: IFacet[];
+  'xs:pattern'?: IFacet[];
+  'xs:minInclusive'?: IFacet[];
+  'xs:maxInclusive'?: IFacet[];
+  'xs:minExclusive'?: IFacet[];
+  'xs:maxExclusive'?: IFacet[];
+  'xs:totalDigits'?: IFacet[];
+  'xs:fractionDigits'?: IFacet[];
+  'xs:whiteSpace'?: IFacet[];
+};
+
+export interface IRestriction extends RestrictionFacets {
+  meta: {
+    base: string;
+  };
+  'xs:enumeration'?: {
     meta: {
-      base: string;
+      value: string;
     };
-    'xs:enumeration'?: {
-      meta: {
-        value: string;
-      };
-    }[];
   }[];
+}
+
+export interface ISimpleType extends IAttribute {
+  'xs:restriction': IRestriction[];
   'xs:list': {
     meta: {
       itemType: string;

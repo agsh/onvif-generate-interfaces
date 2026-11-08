@@ -1,19 +1,13 @@
 import { writeFileSync } from 'fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import chalk from 'chalk';
-import { format } from 'prettier';
+import { format, resolveConfig } from 'prettier';
 import ts from 'typescript';
 import { BASICS_FILENAME, sourceFile } from './constants';
 
-const PRETTIER_OPTIONS = {
-  parser: 'typescript' as const,
-  singleQuote: true,
-  semi: true,
-  trailingComma: 'all' as const,
-  arrowParens: 'always' as const,
-  endOfLine: 'lf' as const,
-  printWidth: 120,
-};
+/** Package root (parent of `src/`) — where `.prettierrc` lives. */
+const PACKAGE_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 /** Print a list of TS AST nodes to source text. */
 export function printNodes(nodes: ts.Node[]): string {
@@ -23,7 +17,8 @@ export function printNodes(nodes: ts.Node[]): string {
 }
 
 export async function formatTypescript(code: string): Promise<string> {
-  return format(code, PRETTIER_OPTIONS);
+  const config = (await resolveConfig(join(PACKAGE_ROOT, 'package.json'))) ?? {};
+  return format(code, { ...config, parser: 'typescript' });
 }
 
 /**
@@ -52,17 +47,21 @@ export async function writeBasicsFile(
   await writeInterfaceFile(outDir, BASICS_FILENAME, builtInTypes, options);
 }
 
-export function formatComment(str: string): string {
-  const strs = str
-    .split('\n')
-    .filter((a) => a.trim() !== '')
-    .map((a) => a.trim().replace(/<[^>]*>/g, ''));
+/** Inner body of a JSDoc block (without the slash-star delimiters). */
+export function formatCommentLines(lines: string[]): string {
+  const strs = lines
+    .flatMap((line) => line.split('\n'))
+    .map((a) => a.trim().replace(/<[^>]*>/g, ''))
+    .filter((a) => a !== '');
   if (strs.length === 0) {
     return '';
   }
   if (strs.length === 1) {
     return `* ${strs[0]} `;
   }
-  const [first, ...others] = strs;
-  return `*\n * ${first}\n${others.map((a) => ` * ${a}`).join('\n')}\n `;
+  return `*\n${strs.map((a) => ` * ${a}`).join('\n')}\n `;
+}
+
+export function formatComment(str: string): string {
+  return formatCommentLines([str]);
 }

@@ -1,0 +1,7 @@
+node_modules/
+.idea/
+interfaces/
+*.tsbuildinfo
+dist/
+build/
+coverage/

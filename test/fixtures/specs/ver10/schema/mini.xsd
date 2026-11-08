@@ -13,7 +13,18 @@
     <xs:annotation>
       <xs:documentation>Opaque reference token.</xs:documentation>
     </xs:annotation>
-    <xs:restriction base="xs:string"/>
+    <xs:restriction base="xs:string">
+      <xs:maxLength value="64"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <!-- Facets → @xsd JSDoc (cf. Dot11PSKPassphrase) -->
+  <xs:simpleType name="PskPassphrase">
+    <xs:restriction base="xs:string">
+      <xs:pattern value="[ -~]{8,63}"/>
+      <xs:minLength value="8"/>
+      <xs:maxLength value="63"/>
+    </xs:restriction>
   </xs:simpleType>
 
   <xs:simpleType name="MoveStatus">
@@ -82,6 +93,17 @@
         <xs:element name="PTZ" type="tt:PTZStatus"/>
         <xs:element name="Event" type="xs:string"/>
         <xs:any namespace="##any" processContents="lax" minOccurs="0"/>
+      </xs:choice>
+    </xs:sequence>
+  </xs:complexType>
+
+  <!-- Numeric maxOccurs > 1 → array (not only unbounded) -->
+  <xs:complexType name="BoundedItems">
+    <xs:sequence>
+      <xs:element name="Item" type="xs:string" maxOccurs="2"/>
+      <xs:choice minOccurs="0" maxOccurs="3">
+        <xs:element name="A" type="xs:string"/>
+        <xs:element name="B" type="xs:int"/>
       </xs:choice>
     </xs:sequence>
   </xs:complexType>
