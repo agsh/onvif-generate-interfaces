@@ -36,6 +36,18 @@ export interface ProcessorConstructor {
   overrides?: GeneratorOverrides;
 }
 
+/** True when maxOccurs means "more than one" (`unbounded` or an integer > 1). */
+export function isRepeatedOccurs(maxOccurs?: string): boolean {
+  if (!maxOccurs || maxOccurs === '1') {
+    return false;
+  }
+  if (maxOccurs === 'unbounded') {
+    return true;
+  }
+  const n = Number(maxOccurs);
+  return Number.isFinite(n) && n > 1;
+}
+
 /**
  * Common class to process xml-files into TypeScript AST nodes.
  */
@@ -373,7 +385,7 @@ export abstract class Processor {
     const name = this.particleName(attribute);
     const typeName = options.typeName ?? resolveTypeRef(attribute.meta.type, this.overrides);
     let type: TypeNode = ts.factory.createTypeReferenceNode(typeName);
-    if (attribute.meta.maxOccurs === 'unbounded' || options.forceArray) {
+    if (isRepeatedOccurs(attribute.meta.maxOccurs) || options.forceArray) {
       type = ts.factory.createArrayTypeNode(type);
     }
 
@@ -407,7 +419,7 @@ export abstract class Processor {
   }
 
   appendChoiceMembers(choice: IChoice, members: ts.Node[]) {
-    const unbounded = choice.meta?.maxOccurs === 'unbounded';
+    const choiceRepeated = isRepeatedOccurs(choice.meta?.maxOccurs);
     if (Array.isArray(choice['xs:element'])) {
       for (const element of choice['xs:element']) {
         let typeName: string | undefined;
@@ -418,7 +430,8 @@ export abstract class Processor {
         members.push(
           this.createProperty(element, {
             forceOptional: true,
-            forceArray: unbounded && element.meta.maxOccurs !== '1',
+            // Parent choice repeats → arrays, unless the branch itself is capped at 1
+            forceArray: choiceRepeated && element.meta.maxOccurs !== '1',
             typeName,
           }),
         );
@@ -426,7 +439,7 @@ export abstract class Processor {
     }
     if (Array.isArray(choice['xs:group'])) {
       for (const group of choice['xs:group']) {
-        this.appendGroupRef(group, members, { forceOptional: true, forceArray: unbounded });
+        this.appendGroupRef(group, members, { forceOptional: true, forceArray: choiceRepeated });
       }
     }
     this.appendAnyMembers(choice['xs:any'], members);
