@@ -350,29 +350,39 @@ export abstract class Processor {
     );
   }
 
-  normalizeParticle(attribute: IAttribute): void {
-    if (attribute.meta.ref && !attribute.meta.name) {
-      attribute.meta.name = this.localNameFromRef(attribute.meta.ref);
+  /** Local name for a particle without mutating `meta` (`ref` → local part). */
+  particleName(attribute: IAttribute): string | undefined {
+    if (attribute.meta.name) {
+      return attribute.meta.name;
     }
+    if (attribute.meta.ref) {
+      return this.localNameFromRef(attribute.meta.ref);
+    }
+    return undefined;
   }
 
   createProperty(
     attribute: IAttribute,
-    options: { forceOptional?: boolean; forceArray?: boolean } = {},
+    options: {
+      forceOptional?: boolean;
+      forceArray?: boolean;
+      /** Override resolved TS type (anonymous inline complexTypes). */
+      typeName?: string;
+    } = {},
   ) {
-    this.normalizeParticle(attribute);
-    const typeName = resolveTypeRef(attribute.meta.type, this.overrides);
+    const name = this.particleName(attribute);
+    const typeName = options.typeName ?? resolveTypeRef(attribute.meta.type, this.overrides);
     let type: TypeNode = ts.factory.createTypeReferenceNode(typeName);
     if (attribute.meta.maxOccurs === 'unbounded' || options.forceArray) {
       type = ts.factory.createArrayTypeNode(type);
     }
 
-    const useOverride = fieldUseOverride(this.fileName, attribute.meta.name, this.overrides);
+    const useOverride = fieldUseOverride(this.fileName, name, this.overrides);
     const effectiveUse = options.forceOptional ? 'optional' : (useOverride ?? attribute.meta.use);
 
     const property = ts.factory.createPropertySignature(
       undefined,
-      camelCase(attribute.meta.name!),
+      camelCase(name!),
       (effectiveUse === 'required' ||
         attribute.meta.minOccurs === '1' ||
         (!attribute.meta.minOccurs && !attribute.meta.maxOccurs && !options.forceOptional)) &&
@@ -400,15 +410,16 @@ export abstract class Processor {
     const unbounded = choice.meta?.maxOccurs === 'unbounded';
     if (Array.isArray(choice['xs:element'])) {
       for (const element of choice['xs:element']) {
-        if (element['xs:complexType']) {
-          element['xs:complexType'][0].meta = { name: element.meta.name, use: 'optional' };
-          this.generateComplexTypeInterface(element['xs:complexType'][0]);
-          element.meta.type = element.meta.name;
+        let typeName: string | undefined;
+        if (element['xs:complexType'] && element.meta.name) {
+          this.generateComplexTypeInterface(element['xs:complexType'][0], element.meta.name);
+          typeName = resolveTypeRef(element.meta.name, this.overrides);
         }
         members.push(
           this.createProperty(element, {
             forceOptional: true,
             forceArray: unbounded && element.meta.maxOccurs !== '1',
+            typeName,
           }),
         );
       }
@@ -436,10 +447,12 @@ export abstract class Processor {
       return;
     }
     for (const attribute of attributes) {
-      if (attribute.meta.use !== 'required') {
-        attribute.meta.use = 'optional';
-      }
-      members.push(this.createProperty(attribute));
+      // XSD attributes default to optional; do not mutate meta.use
+      members.push(
+        this.createProperty(attribute, {
+          forceOptional: attribute.meta.use !== 'required',
+        }),
+      );
     }
   }
 
@@ -503,15 +516,16 @@ export abstract class Processor {
   ) {
     if (Array.isArray(container['xs:element'])) {
       for (const attribute of container['xs:element']) {
-        if (attribute['xs:complexType']) {
-          attribute['xs:complexType'][0].meta = { name: attribute.meta.name, use: 'optional' };
-          this.generateComplexTypeInterface(attribute['xs:complexType'][0]);
-          attribute.meta.type = attribute.meta.name;
+        let typeName: string | undefined;
+        if (attribute['xs:complexType'] && attribute.meta.name) {
+          this.generateComplexTypeInterface(attribute['xs:complexType'][0], attribute.meta.name);
+          typeName = resolveTypeRef(attribute.meta.name, this.overrides);
         }
         members.push(
           this.createProperty(attribute, {
             forceOptional: options.forceOptional,
             forceArray: options.forceArray,
+            typeName,
           }),
         );
       }
@@ -588,60 +602,72 @@ export abstract class Processor {
 
   generateElementType(element: IElement) {
     if (element['xs:complexType'] && typeof element['xs:complexType'][0] === 'object') {
-      element['xs:complexType'][0].meta = {
-        name: element.meta.name,
-        use: 'optional',
-      };
-      this.generateComplexTypeInterface(element['xs:complexType'][0]);
-    } else {
-      if (element['xs:complexType'] && typeof element['xs:complexType'][0] === 'string') {
-        element.meta.type = '';
-      }
-      if (element.meta.type !== undefined) {
-        if (shouldSkipElement(this.fileName, element.meta.name, element.meta.type, this.overrides)) {
-          return;
-        }
-        const name = this.clean(element.meta.name);
-        if (element.meta.type === '') {
-          this.addNode(
-            name,
-            Processor.createAnnotationIfExists(
-              element,
-              ts.factory.createInterfaceDeclaration(
-                exportModifier,
-                ts.factory.createIdentifier(name),
-                undefined,
-                undefined,
-                [],
-              ),
-            ),
-          );
-          return;
-        }
-        const heritageName = resolveTypeRef(element.meta.type, this.overrides);
-        if (name === heritageName) {
-          return;
-        }
-        const heritage = this.extendInterface(heritageName);
-        const node = ts.factory.createInterfaceDeclaration(
-          exportModifier,
-          ts.factory.createIdentifier(name),
-          undefined,
-          heritage,
-          [],
-        );
-        this.addNode(name, Processor.createAnnotationIfExists(element, node));
-      }
+      this.generateComplexTypeInterface(element['xs:complexType'][0], element.meta.name);
+      return;
     }
+
+    // Empty inline complexType serializes as a string in xml2js
+    const emptyInline =
+      element['xs:complexType'] !== undefined && typeof element['xs:complexType'][0] === 'string';
+    const elementType = emptyInline ? '' : element.meta.type;
+    if (elementType === undefined) {
+      return;
+    }
+    if (shouldSkipElement(this.fileName, element.meta.name, elementType || undefined, this.overrides)) {
+      return;
+    }
+    const name = this.clean(element.meta.name);
+    if (elementType === '') {
+      this.addNode(
+        name,
+        Processor.createAnnotationIfExists(
+          element,
+          ts.factory.createInterfaceDeclaration(
+            exportModifier,
+            ts.factory.createIdentifier(name),
+            undefined,
+            undefined,
+            [],
+          ),
+        ),
+      );
+      return;
+    }
+    const heritageName = resolveTypeRef(elementType, this.overrides);
+    if (name === heritageName) {
+      return;
+    }
+    const heritage = this.extendInterface(heritageName);
+    const node = ts.factory.createInterfaceDeclaration(
+      exportModifier,
+      ts.factory.createIdentifier(name),
+      undefined,
+      heritage,
+      [],
+    );
+    this.addNode(name, Processor.createAnnotationIfExists(element, node));
   }
 
-  generateComplexTypeInterface(complexType: IComplexType) {
-    const rawName = complexType.meta.name!;
+  /**
+   * @param complexType - complex content AST
+   * @param nameOverride - for anonymous inline complexTypes (use the element local name).
+   */
+  generateComplexTypeInterface(complexType: IComplexType, nameOverride?: string) {
+    const rawName = nameOverride ?? complexType.meta.name!;
     const name = this.clean(rawName);
     const interfaceSymbol = ts.factory.createIdentifier(name);
 
-    let members: ts.Node[] = [];
+    const members: ts.Node[] = [];
     let heritage;
+
+    // Prefer extension particles/attrs via locals — do not hoist onto complexType
+    let sequences = complexType['xs:sequence'];
+    let choices = complexType['xs:choice'];
+    let alls = complexType['xs:all'];
+    let groups = complexType['xs:group'];
+    let attributes = complexType['xs:attribute'];
+    let attributeGroups = complexType['xs:attributeGroup'];
+    let anyAttributes = complexType['xs:anyAttribute'];
 
     /** Complex Content */
     if (Array.isArray(complexType['xs:complexContent'])) {
@@ -651,23 +677,17 @@ export abstract class Processor {
         return;
       }
       heritage = this.extendInterface(heritageName);
-      if (complexType['xs:sequence'] || complexType['xs:choice'] || complexType['xs:all'] || complexType['xs:group']) {
+      if (sequences || choices || alls || groups) {
         throw new Error(`complexType has particles alongside complexContent: ${name}`);
       }
       const extension = complexType['xs:complexContent'][0]['xs:extension'][0];
-      complexType['xs:sequence'] = extension['xs:sequence'];
-      complexType['xs:choice'] = extension['xs:choice'];
-      complexType['xs:all'] = extension['xs:all'];
-      complexType['xs:group'] = extension['xs:group'];
-      if (extension['xs:attribute']) {
-        complexType['xs:attribute'] = extension['xs:attribute'];
-      }
-      if (extension['xs:attributeGroup']) {
-        complexType['xs:attributeGroup'] = extension['xs:attributeGroup'];
-      }
-      if (extension['xs:anyAttribute']) {
-        complexType['xs:anyAttribute'] = extension['xs:anyAttribute'];
-      }
+      sequences = extension['xs:sequence'];
+      choices = extension['xs:choice'];
+      alls = extension['xs:all'];
+      groups = extension['xs:group'];
+      attributes = extension['xs:attribute'] ?? attributes;
+      attributeGroups = extension['xs:attributeGroup'] ?? attributeGroups;
+      anyAttributes = extension['xs:anyAttribute'] ?? anyAttributes;
     }
 
     /** Simple Content (character data + attributes) */
@@ -677,26 +697,26 @@ export abstract class Processor {
       }
     }
 
-    this.appendAttributeMembers(complexType['xs:attribute'], members);
-    this.appendAttributeGroupRefs(complexType['xs:attributeGroup'], members);
-    this.appendAnyMembers(complexType['xs:anyAttribute'], members);
+    this.appendAttributeMembers(attributes, members);
+    this.appendAttributeGroupRefs(attributeGroups, members);
+    this.appendAnyMembers(anyAttributes, members);
 
-    if (Array.isArray(complexType['xs:choice'])) {
-      for (const choice of complexType['xs:choice']) {
+    if (Array.isArray(choices)) {
+      for (const choice of choices) {
         this.appendChoiceMembers(choice, members);
       }
     }
 
-    if (complexType['xs:sequence']) {
-      this.appendSequenceMembers(complexType['xs:sequence'][0], members);
+    if (sequences) {
+      this.appendSequenceMembers(sequences[0], members);
     }
 
-    if (complexType['xs:all']) {
-      this.appendAllMembers(complexType['xs:all'][0], members);
+    if (alls) {
+      this.appendAllMembers(alls[0], members);
     }
 
-    if (Array.isArray(complexType['xs:group'])) {
-      for (const group of complexType['xs:group']) {
+    if (Array.isArray(groups)) {
+      for (const group of groups) {
         this.appendGroupRef(group, members);
       }
     }
