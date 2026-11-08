@@ -183,7 +183,11 @@ export interface IType {
   name?: string;
 }
 
-/** Maps generated type name → owning module file name (without `.ts`). */
+/**
+ * Maps generated type name → owning module file name (without `.ts`).
+ * First registration wins for cross-file imports; later modules may still
+ * export the same local name (e.g. many `Capabilities` interfaces).
+ */
 export type Links = Map<string, IType>;
 
 /** Namespaces we treat as open extension points → index signatures. */

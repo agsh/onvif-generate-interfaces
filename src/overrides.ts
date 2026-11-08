@@ -79,10 +79,13 @@ export const onvifOverrides: GeneratorOverrides = {
   },
 
   renameTypes: {
-    // JS / DOM `Object` would shadow; keep ONVIF analytics object under a distinct name
+    // JS / DOM `Object` would shadow; keep ONVIF analytics object under a distinct name.
+    // Applied globally by local name only — two XSD `Object`s both become OnvifObject.
     Object: 'OnvifObject',
     // Collides with native JS `Date` used for xs:dateTime — tt:Date is { year, month, day }
     Date: 'OnvifDate',
+    // Do NOT rename service Capabilities → TdsCapabilities / TptzCapabilities etc.:
+    // the library imports Capabilities from the concrete file; prefixes would break callers.
   },
 
   fields: [

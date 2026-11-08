@@ -167,10 +167,22 @@ export abstract class Processor {
     return node;
   }
 
+  /**
+   * Register a generated declaration.
+   *
+   * Name-collision policy (intentional — do not "fix" with service prefixes):
+   * - `links` is first-wins: the first file that defines `Capabilities` owns
+   *   cross-file `import { Capabilities } from './…'`. Later services still
+   *   `export interface Capabilities` locally; consumers import from the
+   *   concrete module (`./ptz.2`, `./media`, …), so unprefixed names stay.
+   * - Prefixes like `TdsCapabilities` / `TptzCapabilities` are a breaking API
+   *   change for the onvif library and are deliberately not used.
+   * - The only suppress-on-collision case is builtins owned by `basics`
+   *   (e.g. PositiveInteger) — those must not be re-emitted by schemas.
+   */
   addNode(name: string, node: ts.Node) {
     if (this.links.has(name)) {
       const owner = this.links.get(name)!.name;
-      // Only suppress redeclaration for true builtins from basics
       if (owner === BASICS_FILENAME && this.fileName !== BASICS_FILENAME) {
         return;
       }
@@ -536,19 +548,42 @@ export abstract class Processor {
     this.appendParticleContainer(all, members);
   }
 
-  /** Emit simpleContent: `_` value + attributes (+ open content from anyAttribute). */
-  appendSimpleContent(simpleContent: ISimpleContent, members: ts.Node[]) {
+  /**
+   * Emit simpleContent.
+   * - Named attributes → interface with `_` (xml2js text) + attrs (e.g. CertificateUsage).
+   * - No named attributes (only anyAttribute / bare) → type alias to the base
+   *   (e.g. OSDReference → ReferenceToken). Callers pass plain tokens; wrapping
+   *   as `{ _: T }` would break assignability from `string`.
+   * Returns true when the whole complexType was emitted as a type alias.
+   */
+  appendSimpleContent(name: string, simpleContent: ISimpleContent, members: ts.Node[]): boolean {
     const extension = simpleContent['xs:extension']?.[0];
     const restriction = simpleContent['xs:restriction']?.[0];
     const body = extension ?? restriction;
     if (!body) {
-      return;
+      return false;
     }
     const baseType = resolveTypeRef(body.meta.base, this.overrides);
+    const hasNamedAttrs =
+      (body['xs:attribute']?.length ?? 0) > 0 || (body['xs:attributeGroup']?.length ?? 0) > 0;
+    if (!hasNamedAttrs) {
+      this.trackUsedType(baseType);
+      this.addNode(
+        name,
+        ts.factory.createTypeAliasDeclaration(
+          exportModifier,
+          ts.factory.createIdentifier(name),
+          undefined,
+          ts.factory.createTypeReferenceNode(baseType),
+        ),
+      );
+      return true;
+    }
     members.push(this.createSimpleContentValueProperty(baseType));
     this.appendAttributeMembers(body['xs:attribute'], members);
     this.appendAttributeGroupRefs(body['xs:attributeGroup'], members);
     this.appendAnyMembers(body['xs:anyAttribute'], members);
+    return false;
   }
 
   generateElementType(element: IElement) {
@@ -637,7 +672,9 @@ export abstract class Processor {
 
     /** Simple Content (character data + attributes) */
     if (Array.isArray(complexType['xs:simpleContent'])) {
-      this.appendSimpleContent(complexType['xs:simpleContent'][0], members);
+      if (this.appendSimpleContent(name, complexType['xs:simpleContent'][0], members)) {
+        return;
+      }
     }
 
     this.appendAttributeMembers(complexType['xs:attribute'], members);

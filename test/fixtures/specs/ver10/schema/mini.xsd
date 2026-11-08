@@ -118,6 +118,15 @@
     </xs:simpleContent>
   </xs:complexType>
 
+  <!-- xs:simpleContent without named attrs → alias to base (cf. OSDReference) -->
+  <xs:complexType name="TokenRef">
+    <xs:simpleContent>
+      <xs:extension base="tt:ReferenceToken">
+        <xs:anyAttribute processContents="lax"/>
+      </xs:extension>
+    </xs:simpleContent>
+  </xs:complexType>
+
   <!-- xs:all — unordered elements -->
   <xs:complexType name="UnorderedPair">
     <xs:all>

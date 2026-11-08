@@ -47,6 +47,7 @@ export interface CertificateUsage {
   _: string;
   critical: boolean;
 }
+export type TokenRef = ReferenceToken;
 export interface UnorderedPair {
   left: string;
   right?: string;

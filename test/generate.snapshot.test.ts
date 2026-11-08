@@ -13,6 +13,7 @@
  *                    xs:choice / xs:all / xs:union / xs:simpleContent / group+attributeGroup,
  *                    ##other / ##targetNamespace
  *  - ptz.wsdl      — ver20 → ptz.2.ts naming, Capabilities, empty complexType
+ *  - media.wsdl    — second service Capabilities (unprefixed; links first-wins)
  *  - devicemgmt    — skipElements for Capabilities alias
  *  - event.wsdl    — suppressImports keeps native Date (no Date import)
  */
@@ -52,7 +53,14 @@ describe('generator golden snapshots', () => {
 
   it('emits the expected set of module files', () => {
     // Fixed set so renaming/dropping a module fails the suite loudly
-    assert.deepEqual(generated, ['basics.ts', 'devicemgmt.ts', 'event.ts', 'mini.ts', 'ptz.2.ts']);
+    assert.deepEqual(generated, [
+      'basics.ts',
+      'devicemgmt.ts',
+      'event.ts',
+      'media.ts',
+      'mini.ts',
+      'ptz.2.ts',
+    ]);
   });
 
   it('matches golden files (or updates them when UPDATE_GOLDENS=1)', () => {
@@ -120,7 +128,13 @@ describe('generator golden snapshots', () => {
     assert.match(device, /export interface DeviceServiceCapabilities/);
     assert.doesNotMatch(device, /export interface Capabilities\b/);
 
+    // Name collisions: each service keeps unprefixed Capabilities (no Tptz/Trt…).
+    // links first-wins only affects cross-file imports, not local emit.
+    const media = readFileSync(join(outDir, 'media.ts'), 'utf8');
     assert.match(ptz, /export interface Capabilities/);
+    assert.match(media, /export interface Capabilities/);
+    assert.doesNotMatch(ptz, /TptzCapabilities|TrtCapabilities|TdsCapabilities/);
+    assert.doesNotMatch(media, /TptzCapabilities|TrtCapabilities|TdsCapabilities/);
     assert.match(ptz, /profileToken\?:/);
   });
 
@@ -143,6 +157,7 @@ describe('generator golden snapshots', () => {
 
     assert.match(mini, /export type Direction = ExtendedDirection/);
     assert.match(mini, /export interface CertificateUsage \{[^}]*_: string;[^}]*critical: boolean;/s);
+    assert.match(mini, /export type TokenRef = ReferenceToken/);
     assert.match(mini, /export interface UnorderedPair \{[^}]*left: string;[^}]*right\?: string;/s);
     assert.match(mini, /export interface NamedPoint \{[^}]*token: ReferenceToken;[^}]*x: number;[^}]*y: number;/s);
     assert.match(mini, /export interface FrameExtension \{[^}]*motionInCells\?: boolean;[^}]*\[key: string\]: unknown;/s);
