@@ -20,15 +20,44 @@ import {
   IElement,
   IGroupRef,
   IParticleContainer,
+  IRestriction,
   ISchemaDefinition,
   ISequence,
   ISimpleContent,
   ISimpleType,
   isExtensionAnyNamespace,
   Links,
+  RestrictionFacets,
 } from './schema-types';
-import { formatComment, writeInterfaceFile } from './write';
+import { formatComment, formatCommentLines, writeInterfaceFile } from './write';
 import { parseXmlFile } from './xml';
+
+/** Facet element local names emitted as `@xsd <name> <value>` in JSDoc. */
+const RESTRICTION_FACET_KEYS = [
+  'xs:length',
+  'xs:minLength',
+  'xs:maxLength',
+  'xs:pattern',
+  'xs:minInclusive',
+  'xs:maxInclusive',
+  'xs:minExclusive',
+  'xs:maxExclusive',
+  'xs:totalDigits',
+  'xs:fractionDigits',
+  'xs:whiteSpace',
+] as const satisfies ReadonlyArray<keyof RestrictionFacets>;
+
+/** Collect `@xsd …` lines from a restriction (skips enumeration — that becomes the type). */
+export function restrictionFacetJsDocLines(restriction: IRestriction): string[] {
+  const lines: string[] = [];
+  for (const key of RESTRICTION_FACET_KEYS) {
+    for (const facet of restriction[key] ?? []) {
+      const name = key.slice('xs:'.length);
+      lines.push(`@xsd ${name} ${facet.meta.value}`);
+    }
+  }
+  return lines;
+}
 
 export interface ProcessorConstructor {
   filePath: string;
@@ -168,15 +197,26 @@ export abstract class Processor {
     return parseXmlFile(this.filePath);
   }
 
-  static createAnnotationIfExists(attribute: IAttribute, node: ts.Node) {
+  /**
+   * Attach JSDoc from xs:annotation and optional extra lines (e.g. `@xsd maxLength 64`).
+   */
+  static createAnnotationIfExists(attribute: IAttribute, node: ts.Node, extraLines: string[] = []) {
+    const lines: string[] = [];
     if (attribute['xs:annotation']) {
       const annotation =
         typeof attribute['xs:annotation']?.[0] === 'string'
           ? attribute['xs:annotation']?.[0]
           : attribute['xs:annotation']?.[0]['xs:documentation'][0];
-      return ts.addSyntheticLeadingComment(node, ts.SyntaxKind.MultiLineCommentTrivia, formatComment(annotation), true);
+      if (annotation) {
+        lines.push(annotation);
+      }
     }
-    return node;
+    lines.push(...extraLines);
+    if (lines.length === 0) {
+      return node;
+    }
+    const body = lines.length === 1 && !extraLines.length ? formatComment(lines[0]) : formatCommentLines(lines);
+    return ts.addSyntheticLeadingComment(node, ts.SyntaxKind.MultiLineCommentTrivia, body, true);
   }
 
   /**
@@ -261,7 +301,9 @@ export abstract class Processor {
 
     const interfaceSymbol = ts.factory.createIdentifier(name);
     if (simpleType['xs:restriction']) {
-      if (simpleType['xs:restriction'][0]['xs:enumeration']) {
+      const restriction = simpleType['xs:restriction'][0];
+      const facetLines = restrictionFacetJsDocLines(restriction);
+      if (restriction['xs:enumeration']) {
         this.addNode(
           name,
           Processor.createAnnotationIfExists(
@@ -271,15 +313,16 @@ export abstract class Processor {
               interfaceSymbol,
               undefined,
               ts.factory.createUnionTypeNode(
-                simpleType['xs:restriction'][0]['xs:enumeration'].map((enumValue) =>
+                restriction['xs:enumeration'].map((enumValue) =>
                   ts.factory.createLiteralTypeNode(ts.factory.createStringLiteral(enumValue.meta.value, true)),
                 ),
               ),
             ),
+            facetLines,
           ),
         );
       } else {
-        const typeName = resolveTypeRef(simpleType['xs:restriction'][0].meta.base, this.overrides);
+        const typeName = resolveTypeRef(restriction.meta.base, this.overrides);
         this.trackUsedType(typeName);
         this.addNode(
           name,
@@ -291,6 +334,7 @@ export abstract class Processor {
               undefined,
               ts.factory.createTypeReferenceNode(typeName),
             ),
+            facetLines,
           ),
         );
       }

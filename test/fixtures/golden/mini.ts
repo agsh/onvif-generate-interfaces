@@ -1,7 +1,16 @@
 import { Duration, PositiveInteger } from './basics';
 
-/** Opaque reference token. */
+/**
+ * Opaque reference token.
+ * @xsd maxLength 64
+ */
 export type ReferenceToken = string;
+/**
+ * @xsd minLength 8
+ * @xsd maxLength 63
+ * @xsd pattern [ -~]{8,63}
+ */
+export type PskPassphrase = string;
 export type MoveStatus = 'IDLE' | 'MOVING' | 'UNKNOWN';
 export type ReferenceTokenList = ReferenceToken[];
 export type Delay = Duration;
@@ -36,6 +45,11 @@ export interface MetadataStream {
   event?: string[];
   [key: string]: unknown;
   [key: symbol]: unknown;
+}
+export interface BoundedItems {
+  item?: string[];
+  a?: string[];
+  b?: number[];
 }
 export interface PresetDetail {
   presetToken?: ReferenceToken;

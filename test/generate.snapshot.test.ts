@@ -138,7 +138,7 @@ describe('generator golden snapshots', () => {
     assert.match(ptz, /profileToken\?:/);
   });
 
-  it('maps xs:choice: optional branches, unbounded → arrays', () => {
+  it('maps xs:choice: optional branches, unbounded/numeric maxOccurs → arrays', () => {
     const mini = readFileSync(join(outDir, 'mini.ts'), 'utf8');
 
     // Top-level choice → exclusive optional fields
@@ -150,6 +150,9 @@ describe('generator golden snapshots', () => {
 
     // Exclusive choice + sibling xs:any
     assert.match(mini, /export interface PresetDetail \{[^}]*presetToken\?: ReferenceToken;[^}]*home\?: boolean;/s);
+
+    // Numeric maxOccurs="2" / choice maxOccurs="3" → arrays (same as unbounded)
+    assert.match(mini, /export interface BoundedItems \{[^}]*item\?: string\[\];[^}]*a\?: string\[\];[^}]*b\?: number\[\];/s);
   });
 
   it('maps union, simpleContent, all, group/attributeGroup, ##other/##targetNamespace', () => {
@@ -162,5 +165,20 @@ describe('generator golden snapshots', () => {
     assert.match(mini, /export interface NamedPoint \{[^}]*token: ReferenceToken;[^}]*x: number;[^}]*y: number;/s);
     assert.match(mini, /export interface FrameExtension \{[^}]*motionInCells\?: boolean;[^}]*\[key: string\]: unknown;/s);
     assert.match(mini, /export interface FrameExtension2 \{[^}]*\[key: string\]: unknown;/s);
+  });
+
+  it('emits XSD facets as @xsd JSDoc on restriction aliases', () => {
+    const mini = readFileSync(join(outDir, 'mini.ts'), 'utf8');
+
+    // documentation + facet
+    assert.match(
+      mini,
+      /\/\*\*[\s\S]*Opaque reference token\.[\s\S]*@xsd maxLength 64[\s\S]*\*\/\s*export type ReferenceToken = string/,
+    );
+    // length + pattern facets without xs:documentation (order follows RESTRICTION_FACET_KEYS)
+    assert.match(
+      mini,
+      /\/\*\*[\s\S]*@xsd minLength 8[\s\S]*@xsd maxLength 63[\s\S]*@xsd pattern \[ -~\]\{8,63\}[\s\S]*\*\/\s*export type PskPassphrase = string/,
+    );
   });
 });
